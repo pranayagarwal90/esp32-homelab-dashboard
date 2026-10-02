@@ -10,6 +10,7 @@ PIO="$ROOT_DIR/.venv-platformio/bin/pio"
 WINDOWS_PROJECT="/mnt/c/Users/Deepika/OneDrive/Documents/PlatformIO/Projects/esp32-cyd-homelab"
 WINDOWS_MAIN="$WINDOWS_PROJECT/src/main.cpp"
 WINDOWS_PLATFORMIO="$WINDOWS_PROJECT/platformio.ini"
+WINDOWS_INCLUDE="$WINDOWS_PROJECT/include"
 
 WINDOWS_PROJECT_PS='C:\Users\Deepika\OneDrive\Documents\PlatformIO\Projects\esp32-cyd-homelab'
 WINDOWS_PIO_PS='C:\Users\Deepika\.platformio\penv\Scripts\platformio.exe'
@@ -21,7 +22,7 @@ echo "========================================"
 echo
 
 # --------------------------------------------------
-# Validate required files
+# Validate required files/directories
 # --------------------------------------------------
 
 if [ ! -x "$PIO" ]; then
@@ -37,6 +38,12 @@ fi
 
 if [ ! -f "$FIRMWARE_DIR/platformio.ini" ]; then
     echo "ERROR: Firmware platformio.ini not found."
+    exit 1
+fi
+
+if [ ! -d "$FIRMWARE_DIR/include" ]; then
+    echo "ERROR: Firmware include directory not found:"
+    echo "  $FIRMWARE_DIR/include"
     exit 1
 fi
 
@@ -62,17 +69,38 @@ echo "WSL build successful."
 echo
 
 # --------------------------------------------------
-# Step 2 - Sync source to Windows deployment project
+# Step 2 - Sync firmware to Windows deployment project
 # --------------------------------------------------
 
 echo "[2/3] Syncing firmware to Windows PlatformIO project..."
+echo
+
+mkdir -p "$WINDOWS_PROJECT/src"
+mkdir -p "$WINDOWS_INCLUDE"
 
 cp "$FIRMWARE_DIR/src/main.cpp" "$WINDOWS_MAIN"
 cp "$FIRMWARE_DIR/platformio.ini" "$WINDOWS_PLATFORMIO"
 
-echo "Source synchronized."
+echo "  Copied: src/main.cpp"
+echo "  Copied: platformio.ini"
+
+HEADER_COUNT=0
+
+while IFS= read -r -d '' header; do
+    filename="$(basename "$header")"
+
+    if [ "$filename" = "secrets.h" ]; then
+        continue
+    fi
+
+    cp "$header" "$WINDOWS_INCLUDE/$filename"
+    echo "  Copied: include/$filename"
+    HEADER_COUNT=$((HEADER_COUNT + 1))
+done < <(find "$FIRMWARE_DIR/include" -maxdepth 1 -type f -print0)
+
 echo
-echo "NOTE: Windows include/secrets.h was NOT touched."
+echo "Header files copied: $HEADER_COUNT"
+echo "NOTE: include/secrets.h was intentionally NOT copied."
 echo
 
 # --------------------------------------------------
