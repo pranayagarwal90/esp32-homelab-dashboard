@@ -1,7 +1,9 @@
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.client import HTTPConnection, HTTPSConnection
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
-from urllib.parse import unquote, urlencode
+from urllib.parse import unquote, urlencode, urlsplit
 from urllib.request import urlopen
 from zoneinfo import ZoneInfo
 import json
@@ -189,6 +191,72 @@ def docker_status():
         }
 
 
+SERVICE_HEALTH_TIMEOUT_SECONDS = 0.5
+# Verified against this homelab's published ports and read-only HTTP probes.
+# Environment variables below can override these deployment-specific defaults.
+DEFAULT_SERVICE_HEALTH_URLS = {
+    "jellyfin": "http://192.168.1.13:8096/health",
+    "navidrome": "http://127.0.0.1:4533/ping",
+    "ollama": "http://127.0.0.1:11434/api/version",
+    "nextcloud": "http://127.0.0.1:8080/status.php",
+    "immich": "http://127.0.0.1:2283/api/server/ping",
+    "technical_blog": "http://192.168.1.13:8085/",
+}
+SERVICE_MATCH_TERMS = {
+    "jellyfin": ("jellyfin",),
+    "navidrome": ("navidrome",),
+    "metube": ("metube",),
+    "bazarr": ("bazarr",),
+    "ollama": ("ollama",),
+    "cloudflare": ("cloudflared", "cloudflare"),
+    "mcp": ("mcp",),
+    # No assumed container identities for the new display entries.
+    "nextcloud": (),
+    "immich": (),
+    "technical_blog": (),
+}
+
+
+def check_service_http(url, service=None):
+    connection = None
+    try:
+        endpoint = urlsplit(url)
+        if (endpoint.scheme not in {"http", "https"} or not endpoint.hostname
+                or endpoint.username is not None or endpoint.password is not None
+                or endpoint.fragment):
+            return False
+        connection_class = HTTPSConnection if endpoint.scheme == "https" else HTTPConnection
+        connection = connection_class(
+            endpoint.hostname, endpoint.port, timeout=SERVICE_HEALTH_TIMEOUT_SECONDS
+        )
+        path = endpoint.path or "/"
+        if endpoint.query:
+            path += "?" + endpoint.query
+        connection.request("GET", path)
+        response = connection.getresponse()
+        if not 200 <= response.status < 300:
+            return False
+        # Read only the small JSON health responses, never application pages.
+        if service in {"nextcloud", "immich", "ollama"}:
+            body = response.read(4097)
+            if len(body) > 4096:
+                return False
+            data = json.loads(body)
+            if service == "nextcloud":
+                return (data.get("installed") is True
+                        and data.get("maintenance") is False
+                        and data.get("needsDbUpgrade") is False)
+            if service == "immich":
+                return data.get("res") == "pong"
+            return isinstance(data.get("version"), str) and bool(data["version"].strip())
+        return True
+    except Exception:
+        return False
+    finally:
+        if connection is not None:
+            connection.close()
+
+
 def service_status(docker):
     running_names = {
         c["name"].lower()
@@ -202,15 +270,25 @@ def service_status(docker):
             for name in running_names
         )
 
-    return {
-        "jellyfin": any_match("jellyfin"),
-        "navidrome": any_match("navidrome"),
-        "metube": any_match("metube"),
-        "bazarr": any_match("bazarr"),
-        "ollama": any_match("ollama"),
-        "cloudflare": any_match("cloudflared", "cloudflare"),
-        "mcp": any_match("mcp"),
-    }
+    services = {}
+    # No assumed hosts or ports. Configure only operator-verified health URLs.
+    with ThreadPoolExecutor(max_workers=len(SERVICE_MATCH_TERMS)) as executor:
+        checks = {}
+        for name, terms in SERVICE_MATCH_TERMS.items():
+            url = os.environ.get(
+                f"SERVICE_{name.upper()}_HEALTH_URL",
+                DEFAULT_SERVICE_HEALTH_URLS.get(name, ""),
+            ).strip()
+            if url:
+                checks[name] = executor.submit(check_service_http, url, name)
+            else:
+                services[name] = any_match(*terms)
+        for name, check in checks.items():
+            try:
+                services[name] = bool(check.result())
+            except Exception:
+                services[name] = False
+    return services
 
 
 def get_times():

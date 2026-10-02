@@ -170,15 +170,15 @@ bool serviceJellyfin = false;
 
 bool serviceNavidrome = false;
 
-bool serviceMetube = false;
+bool serviceNextcloud = false;
 
-bool serviceBazarr = false;
+bool serviceImmich = false;
 
 bool serviceOllama = false;
 
 bool serviceCloudflare = false;
 
-bool serviceMcp = false;
+bool serviceTechnicalBlog = false;
 
 
 
@@ -784,15 +784,15 @@ void drawServicesPage() {
 
   drawServiceRow("Navidrome", serviceNavidrome, y); y += 22;
 
-  drawServiceRow("MeTube", serviceMetube, y); y += 22;
-
-  drawServiceRow("Bazarr", serviceBazarr, y); y += 22;
-
   drawServiceRow("Ollama", serviceOllama, y); y += 22;
 
-  drawServiceRow("Cloudflare", serviceCloudflare, y); y += 22;
+  drawServiceRow("Cloudfare", serviceCloudflare, y); y += 22;
 
-  drawServiceRow("MCP Server", serviceMcp, y);
+  drawServiceRow("NextCloud", serviceNextcloud, y); y += 22;
+
+  drawServiceRow("Immich", serviceImmich, y); y += 22;
+
+  drawServiceRow("Technical Blog", serviceTechnicalBlog, y);
 
 
 
@@ -2142,15 +2142,15 @@ void fetchHomelabStatus() {
 
   serviceNavidrome = doc["services"]["navidrome"] | false;
 
-  serviceMetube = doc["services"]["metube"] | false;
+  serviceNextcloud = doc["services"]["nextcloud"] | false;
 
-  serviceBazarr = doc["services"]["bazarr"] | false;
+  serviceImmich = doc["services"]["immich"] | false;
 
   serviceOllama = doc["services"]["ollama"] | false;
 
   serviceCloudflare = doc["services"]["cloudflare"] | false;
 
-  serviceMcp = doc["services"]["mcp"] | false;
+  serviceTechnicalBlog = doc["services"]["technical_blog"] | false;
 
 
 
