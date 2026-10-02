@@ -22,3 +22,11 @@ venv/
 .env
 .env.*
 secrets.*
+
+# ESP32 secrets
+firmware/include/secrets.h
+
+# PlatformIO build output
+firmware/.pio/
+firmware/.vscode/
+!firmware/include/secrets.example.h
