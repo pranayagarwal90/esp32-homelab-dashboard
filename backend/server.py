@@ -197,6 +197,8 @@ SERVICE_HEALTH_TIMEOUT_SECONDS = 0.5
 DEFAULT_SERVICE_HEALTH_URLS = {
     "jellyfin": "http://192.168.1.13:8096/health",
     "navidrome": "http://127.0.0.1:4533/ping",
+    # Published 8084 -> 8081; installed MeTube healthcheck requests /.
+    "metube": "http://127.0.0.1:8084/",
     "ollama": "http://127.0.0.1:11434/api/version",
     "nextcloud": "http://127.0.0.1:8080/status.php",
     "immich": "http://127.0.0.1:2283/api/server/ping",
@@ -236,7 +238,12 @@ def check_service_http(url, service=None):
         response = connection.getresponse()
         if not 200 <= response.status < 300:
             return False
-        # Read only the small JSON health responses, never application pages.
+        # Jellyfin's native Windows health endpoint returns plain-text Healthy.
+        # A generic successful HTML response must not count as Jellyfin health.
+        if service == "jellyfin":
+            body = response.read(4097)
+            return len(body) <= 4096 and body.strip() == b"Healthy"
+        # Read only small health responses, never application pages.
         if service in {"nextcloud", "immich", "ollama"}:
             body = response.read(4097)
             if len(body) > 4096:
