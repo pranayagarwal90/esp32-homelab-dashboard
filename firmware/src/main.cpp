@@ -592,7 +592,7 @@ String formatUptime(float hours) {
 void drawHomePage() {
   currentPage = PAGE_HOME;
   tft.fillScreen(TFT_BLACK);
-  drawHeader("HOMESERVER");
+  drawHeader("HOMESERVER STATUS");
 
   drawCompactMetric("CPU", cpuPercent, 14, 45, 138);
   drawCompactMetric("RAM", memPercent, 168, 45, 138);
