@@ -1,4 +1,7 @@
 #include <Arduino.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/queue.h>
+#include <freertos/task.h>
 
 #include <WiFi.h>
 
@@ -170,15 +173,15 @@ bool serviceJellyfin = false;
 
 bool serviceNavidrome = false;
 
-bool serviceMetube = false;
+bool serviceNextcloud = false;
 
-bool serviceBazarr = false;
+bool serviceImmich = false;
 
 bool serviceOllama = false;
 
 bool serviceCloudflare = false;
 
-bool serviceMcp = false;
+bool serviceTechnicalBlog = false;
 
 
 
@@ -784,15 +787,15 @@ void drawServicesPage() {
 
   drawServiceRow("Navidrome", serviceNavidrome, y); y += 22;
 
-  drawServiceRow("MeTube", serviceMetube, y); y += 22;
-
-  drawServiceRow("Bazarr", serviceBazarr, y); y += 22;
-
   drawServiceRow("Ollama", serviceOllama, y); y += 22;
 
-  drawServiceRow("Cloudflare", serviceCloudflare, y); y += 22;
+  drawServiceRow("Cloudfare", serviceCloudflare, y); y += 22;
 
-  drawServiceRow("MCP Server", serviceMcp, y);
+  drawServiceRow("NextCloud", serviceNextcloud, y); y += 22;
+
+  drawServiceRow("Immich", serviceImmich, y); y += 22;
+
+  drawServiceRow("Technical Blog", serviceTechnicalBlog, y);
 
 
 
@@ -2018,162 +2021,331 @@ void drawCurrentPage() {
 
 
 
-void fetchHomelabStatus() {
+// A single slot, transferred through queues. The worker cannot reuse it until
+// the main task has consumed the result and submitted the next request.
+struct StatusSnapshot {
+  float uptimeHours;
+  float cpuPercent;
+  float memUsed;
+  float memTotal;
+  float memPercent;
+  String diskNames[MAX_DISKS];
+  String diskLabels[MAX_DISKS];
+  float diskUsedGb[MAX_DISKS];
+  float diskTotalGb[MAX_DISKS];
+  float diskPercentages[MAX_DISKS];
+  int diskCount;
+  float gpuPercent;
+  String gpuName;
+  bool wifiAvailable;
+  float wifiLinkMbps;
+  float wifiRxMbps;
+  float wifiTxMbps;
+  int wifiSignalPercent;
+  int totalRunningContainers;
+  int displayedContainers;
+  String containerNames[MAX_CONTAINERS];
+  bool containerRunning[MAX_CONTAINERS];
+  bool serviceJellyfin;
+  bool serviceNavidrome;
+  bool serviceNextcloud;
+  bool serviceImmich;
+  bool serviceOllama;
+  bool serviceCloudflare;
+  bool serviceTechnicalBlog;
+  String localTime;
+  String localDate;
+  String indiaTime;
+  String singaporeTime;
+  String londonTime;
+  int currentYear;
+  int currentMonth;
+  int currentDay;
+  bool weatherAvailable;
+  float temperatureC;
+  float highC;
+  float lowC;
+  String weatherCondition;
+};
 
+struct StatusRequest { int year, month, day; };
+enum class StatusOutcome { Success, ReconnectFailed, HttpFailed, InvalidBody };
+struct StatusResult {
+  const StatusSnapshot* snapshot;
+  StatusOutcome outcome;
+};
+
+static StatusSnapshot statusSnapshot;
+static QueueHandle_t statusRequests = nullptr;
+static QueueHandle_t statusResults = nullptr;
+static bool statusInFlight = false; // Main task only.
+static constexpr uint32_t STATUS_TIMEOUT_MS = 8000;
+static constexpr size_t STATUS_MAX_BODY = 32768;
+static constexpr uint32_t STATUS_STACK_BYTES = 8192;
+
+// HTTPClient's timeout is an inactivity timeout. Enforce an absolute deadline
+// too, including servers that drip header bytes without finishing a line.
+class StatusClient : public WiFiClient {
+  unsigned long started = millis();
+  bool expired() {
+    if (millis() - started < STATUS_TIMEOUT_MS) return false;
+    WiFiClient::stop();
+    return true;
+  }
+public:
+  bool timedOut() const { return millis() - started >= STATUS_TIMEOUT_MS; }
+  int available() override { return expired() ? 0 : WiFiClient::available(); }
+  int read() override { return expired() ? -1 : WiFiClient::read(); }
+  int read(uint8_t* buffer, size_t size) override {
+    return expired() ? -1 : WiFiClient::read(buffer, size);
+  }
+  uint8_t connected() override { return expired() ? 0 : WiFiClient::connected(); }
+};
+
+StatusOutcome readStatus(const StatusRequest& request, StatusSnapshot& snapshot) {
   if (WiFi.status() != WL_CONNECTED) {
-
     WiFi.disconnect();
-
     WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-
     unsigned long start = millis();
-
-    while (WiFi.status() != WL_CONNECTED && millis() - start < 8000) delay(250);
-
-    if (WiFi.status() != WL_CONNECTED) {
-
-      serverOnline = false;
-
-      if (currentPage != PAGE_SCREENSAVER && currentPage != PAGE_TTT && currentPage != PAGE_REACTION) drawCurrentPage();
-
-      return;
-
+    while (WiFi.status() != WL_CONNECTED && millis() - start < STATUS_TIMEOUT_MS) {
+      vTaskDelay(pdMS_TO_TICKS(250));
     }
-
+    if (WiFi.status() != WL_CONNECTED) return StatusOutcome::ReconnectFailed;
   }
 
-
-
+  StatusClient client;
   HTTPClient http;
-
-  http.setTimeout(8000);
-
+  http.setConnectTimeout(STATUS_TIMEOUT_MS);
+  http.setTimeout(STATUS_TIMEOUT_MS);
   http.setReuse(false);
-
-  http.begin(API_STATUS);
-
+  // HTTP/1.0 requests an identity body, avoiding raw chunk framing.
+  http.useHTTP10(true);
+  if (!http.begin(client, API_STATUS)) return StatusOutcome::HttpFailed;
   int code = http.GET();
-
-
-
   if (code != HTTP_CODE_OK) {
-
     Serial.printf("HTTP error: %d\n", code);
-
-    serverOnline = false;
-
     http.end();
-
-    return;
-
+    return StatusOutcome::HttpFailed;
   }
 
-
+  int length = http.getSize();
+  String body;
+  bool valid = length != 0 && length <= (int)STATUS_MAX_BODY;
+  if (valid) valid = body.reserve(length > 0 ? length : 1024);
+  unsigned long bodyStart = millis();
+  while (valid && (length < 0 || body.length() < (size_t)length)) {
+    if (millis() - bodyStart >= STATUS_TIMEOUT_MS) { valid = false; break; }
+    int available = client.available();
+    if (available > 0) {
+      uint8_t buffer[512];
+      size_t count = min((size_t)available, sizeof(buffer));
+      if (length >= 0) count = min(count, (size_t)length - body.length());
+      int received = client.read(buffer, count);
+      if (received <= 0 || body.length() + received > STATUS_MAX_BODY ||
+          !body.concat((const char*)buffer, received)) { valid = false; break; }
+    } else if (!client.connected()) {
+      break;
+    } else {
+      vTaskDelay(pdMS_TO_TICKS(1));
+    }
+  }
+  if (client.timedOut() || (length >= 0 && body.length() != (size_t)length)) valid = false;
+  http.end();
+  if (!valid) return StatusOutcome::InvalidBody;
 
   JsonDocument doc;
-
-  DeserializationError error = deserializeJson(doc, http.getString());
-
+  DeserializationError error = deserializeJson(doc, body);
   if (error) {
-
     Serial.print("JSON error: ");
-
     Serial.println(error.c_str());
-
-    http.end();
-
-    return;
-
+    return StatusOutcome::InvalidBody;
   }
+  snapshot.currentYear = request.year;
+  snapshot.currentMonth = request.month;
+  snapshot.currentDay = request.day;
+  snapshot.uptimeHours = doc["uptime_hours"] | 0.0;
+  snapshot.cpuPercent = doc["cpu"]["percent"] | 0.0;
 
+  snapshot.memUsed = doc["memory"]["used_gb"] | 0.0;
+  snapshot.memTotal = doc["memory"]["total_gb"] | 0.0;
+  snapshot.memPercent = doc["memory"]["percent"] | 0.0;
 
-
-  uptimeHours = doc["uptime_hours"] | 0.0;
-  cpuPercent = doc["cpu"]["percent"] | 0.0;
-
-  memUsed = doc["memory"]["used_gb"] | 0.0;
-  memTotal = doc["memory"]["total_gb"] | 0.0;
-  memPercent = doc["memory"]["percent"] | 0.0;
-
-  diskCount = 0;
+  snapshot.diskCount = 0;
   for (JsonObject disk : doc["disks"].as<JsonArray>()) {
-    if (diskCount >= MAX_DISKS) break;
-    diskNames[diskCount] = disk["name"].as<String>();
-    diskLabels[diskCount] = disk["label"].as<String>();
-    diskUsedGb[diskCount] = disk["used_gb"] | 0.0;
-    diskTotalGb[diskCount] = disk["total_gb"] | 0.0;
-    diskPercentages[diskCount] = disk["percent"] | 0.0;
-    diskCount++;
+    if (snapshot.diskCount >= MAX_DISKS) break;
+    snapshot.diskNames[snapshot.diskCount] = disk["name"].as<String>();
+    snapshot.diskLabels[snapshot.diskCount] = disk["label"].as<String>();
+    snapshot.diskUsedGb[snapshot.diskCount] = disk["used_gb"] | 0.0;
+    snapshot.diskTotalGb[snapshot.diskCount] = disk["total_gb"] | 0.0;
+    snapshot.diskPercentages[snapshot.diskCount] = disk["percent"] | 0.0;
+    snapshot.diskCount++;
   }
 
-  gpuPercent = doc["gpu"]["percent"] | 0.0;
-  gpuName = doc["gpu"]["name"].as<String>();
+  snapshot.gpuPercent = doc["gpu"]["percent"] | 0.0;
+  snapshot.gpuName = doc["gpu"]["name"].as<String>();
 
-  wifiAvailable = doc["wifi"]["available"] | false;
-  wifiLinkMbps = doc["wifi"]["link_mbps"] | 0.0;
-  wifiRxMbps = doc["wifi"]["receive_mbps"] | 0.0;
-  wifiTxMbps = doc["wifi"]["send_mbps"] | 0.0;
+  snapshot.wifiAvailable = doc["wifi"]["available"] | false;
+  snapshot.wifiLinkMbps = doc["wifi"]["link_mbps"] | 0.0;
+  snapshot.wifiRxMbps = doc["wifi"]["receive_mbps"] | 0.0;
+  snapshot.wifiTxMbps = doc["wifi"]["send_mbps"] | 0.0;
 
   if (doc["wifi"]["signal_percent"].is<int>()) {
-    wifiSignalPercent = doc["wifi"]["signal_percent"].as<int>();
+    snapshot.wifiSignalPercent = doc["wifi"]["signal_percent"].as<int>();
   } else {
-    wifiSignalPercent = -1;
+    snapshot.wifiSignalPercent = -1;
   }
 
-  totalRunningContainers = doc["docker"]["running"] | 0;
+  snapshot.totalRunningContainers = doc["docker"]["running"] | 0;
 
-  displayedContainers = 0;
+  snapshot.displayedContainers = 0;
 
   for (JsonObject container : doc["docker"]["containers"].as<JsonArray>()) {
 
-    if (displayedContainers >= MAX_CONTAINERS) break;
+    if (snapshot.displayedContainers >= MAX_CONTAINERS) break;
 
-    containerNames[displayedContainers] = container["name"].as<String>();
+    snapshot.containerNames[snapshot.displayedContainers] = container["name"].as<String>();
 
-    containerRunning[displayedContainers] = container["running"] | false;
+    snapshot.containerRunning[snapshot.displayedContainers] = container["running"] | false;
 
-    displayedContainers++;
+    snapshot.displayedContainers++;
 
   }
 
 
 
-  serviceJellyfin = doc["services"]["jellyfin"] | false;
+  snapshot.serviceJellyfin = doc["services"]["jellyfin"] | false;
 
-  serviceNavidrome = doc["services"]["navidrome"] | false;
+  snapshot.serviceNavidrome = doc["services"]["navidrome"] | false;
 
-  serviceMetube = doc["services"]["metube"] | false;
+  snapshot.serviceNextcloud = doc["services"]["nextcloud"] | false;
 
-  serviceBazarr = doc["services"]["bazarr"] | false;
+  snapshot.serviceImmich = doc["services"]["immich"] | false;
 
-  serviceOllama = doc["services"]["ollama"] | false;
+  snapshot.serviceOllama = doc["services"]["ollama"] | false;
 
-  serviceCloudflare = doc["services"]["cloudflare"] | false;
+  snapshot.serviceCloudflare = doc["services"]["cloudflare"] | false;
 
-  serviceMcp = doc["services"]["mcp"] | false;
-
-
-
-  localTime = doc["timezones"]["local"]["time"].as<String>();
-
-  localDate = doc["timezones"]["local"]["date"].as<String>();
-
-  indiaTime = doc["timezones"]["india"]["time"].as<String>();
-
-  singaporeTime = doc["timezones"]["singapore"]["time"].as<String>();
-
-  londonTime = doc["timezones"]["london"]["time"].as<String>();
+  snapshot.serviceTechnicalBlog = doc["services"]["technical_blog"] | false;
 
 
 
-  currentYear = doc["timezones"]["local"]["year"] | currentYear;
+  snapshot.localTime = doc["timezones"]["local"]["time"].as<String>();
 
-  currentMonth = doc["timezones"]["local"]["month"] | currentMonth;
+  snapshot.localDate = doc["timezones"]["local"]["date"].as<String>();
 
-  currentDay = doc["timezones"]["local"]["day"] | currentDay;
+  snapshot.indiaTime = doc["timezones"]["india"]["time"].as<String>();
+
+  snapshot.singaporeTime = doc["timezones"]["singapore"]["time"].as<String>();
+
+  snapshot.londonTime = doc["timezones"]["london"]["time"].as<String>();
 
 
 
+  snapshot.currentYear = doc["timezones"]["local"]["year"] | snapshot.currentYear;
+
+  snapshot.currentMonth = doc["timezones"]["local"]["month"] | snapshot.currentMonth;
+
+  snapshot.currentDay = doc["timezones"]["local"]["day"] | snapshot.currentDay;
+
+
+
+  snapshot.weatherAvailable = doc["weather"]["available"] | false;
+
+  if (snapshot.weatherAvailable) {
+
+    snapshot.temperatureC = doc["weather"]["temperature_c"] | 0.0;
+
+    snapshot.highC = doc["weather"]["high_c"] | 0.0;
+
+    snapshot.lowC = doc["weather"]["low_c"] | 0.0;
+
+    snapshot.weatherCondition = doc["weather"]["condition"].as<String>();
+
+  }
+
+
+
+  return StatusOutcome::Success;
+}
+
+void statusWorker(void*) {
+  StatusRequest request;
+  for (;;) {
+    if (xQueueReceive(statusRequests, &request, portMAX_DELAY) != pdTRUE) continue;
+    StatusOutcome outcome = readStatus(request, statusSnapshot);
+    StatusResult result = {
+      outcome == StatusOutcome::Success ? &statusSnapshot : nullptr, outcome
+    };
+    xQueueSend(statusResults, &result, portMAX_DELAY);
+    // No snapshot access after publication until a new request arrives.
+  }
+}
+
+void setupStatusWorker() {
+  statusRequests = xQueueCreate(1, sizeof(StatusRequest));
+  statusResults = xQueueCreate(1, sizeof(StatusResult));
+  if (statusRequests && statusResults &&
+      xTaskCreate(statusWorker, "status", STATUS_STACK_BYTES, nullptr, 1, nullptr) == pdPASS) return;
+  if (statusRequests) vQueueDelete(statusRequests);
+  if (statusResults) vQueueDelete(statusResults);
+  statusRequests = statusResults = nullptr;
+  Serial.println("Could not create status worker");
+}
+
+void fetchHomelabStatus() {
+  if (!statusRequests || statusInFlight) return;
+  StatusRequest request = {currentYear, currentMonth, currentDay};
+  if (xQueueSend(statusRequests, &request, 0) == pdTRUE) {
+    statusInFlight = true;
+    lastRefresh = millis();
+  }
+}
+
+void applyStatusSnapshot(const StatusSnapshot& snapshot) {
+  uptimeHours = snapshot.uptimeHours;
+  cpuPercent = snapshot.cpuPercent;
+  memUsed = snapshot.memUsed;
+  memTotal = snapshot.memTotal;
+  memPercent = snapshot.memPercent;
+  for (int i = 0; i < MAX_DISKS; ++i) diskNames[i] = snapshot.diskNames[i];
+  for (int i = 0; i < MAX_DISKS; ++i) diskLabels[i] = snapshot.diskLabels[i];
+  for (int i = 0; i < MAX_DISKS; ++i) diskUsedGb[i] = snapshot.diskUsedGb[i];
+  for (int i = 0; i < MAX_DISKS; ++i) diskTotalGb[i] = snapshot.diskTotalGb[i];
+  for (int i = 0; i < MAX_DISKS; ++i) diskPercentages[i] = snapshot.diskPercentages[i];
+  diskCount = snapshot.diskCount;
+  gpuPercent = snapshot.gpuPercent;
+  gpuName = snapshot.gpuName;
+  wifiAvailable = snapshot.wifiAvailable;
+  wifiLinkMbps = snapshot.wifiLinkMbps;
+  wifiRxMbps = snapshot.wifiRxMbps;
+  wifiTxMbps = snapshot.wifiTxMbps;
+  wifiSignalPercent = snapshot.wifiSignalPercent;
+  totalRunningContainers = snapshot.totalRunningContainers;
+  displayedContainers = snapshot.displayedContainers;
+  for (int i = 0; i < MAX_CONTAINERS; ++i) containerNames[i] = snapshot.containerNames[i];
+  for (int i = 0; i < MAX_CONTAINERS; ++i) containerRunning[i] = snapshot.containerRunning[i];
+  serviceJellyfin = snapshot.serviceJellyfin;
+  serviceNavidrome = snapshot.serviceNavidrome;
+  serviceNextcloud = snapshot.serviceNextcloud;
+  serviceImmich = snapshot.serviceImmich;
+  serviceOllama = snapshot.serviceOllama;
+  serviceCloudflare = snapshot.serviceCloudflare;
+  serviceTechnicalBlog = snapshot.serviceTechnicalBlog;
+  localTime = snapshot.localTime;
+  localDate = snapshot.localDate;
+  indiaTime = snapshot.indiaTime;
+  singaporeTime = snapshot.singaporeTime;
+  londonTime = snapshot.londonTime;
+  currentYear = snapshot.currentYear;
+  currentMonth = snapshot.currentMonth;
+  currentDay = snapshot.currentDay;
+  weatherAvailable = snapshot.weatherAvailable;
+  if (weatherAvailable) {
+    temperatureC = snapshot.temperatureC;
+    highC = snapshot.highC;
+    lowC = snapshot.lowC;
+    weatherCondition = snapshot.weatherCondition;
+  }
   if (calendarYear == 2026 && calendarMonth == 1 && currentMonth != 1) {
 
     calendarYear = currentYear;
@@ -2184,36 +2356,25 @@ void fetchHomelabStatus() {
 
 
 
-  weatherAvailable = doc["weather"]["available"] | false;
-
-  if (weatherAvailable) {
-
-    temperatureC = doc["weather"]["temperature_c"] | 0.0;
-
-    highC = doc["weather"]["high_c"] | 0.0;
-
-    lowC = doc["weather"]["low_c"] | 0.0;
-
-    weatherCondition = doc["weather"]["condition"].as<String>();
-
-  }
-
-
-
   serverOnline = true;
-
-  http.end();
-
-
-
-  if (currentPage != PAGE_TTT && currentPage != PAGE_REACTION && currentPage != PAGE_GAMES && currentPage != PAGE_PHOTOS && currentPage != PAGE_SCREENSAVER) {
-
-    drawCurrentPage();
-
-  }
-
 }
 
+void processStatusResult() {
+  StatusResult result;
+  if (!statusResults || xQueueReceive(statusResults, &result, 0) != pdTRUE) return;
+  if (result.snapshot) {
+    applyStatusSnapshot(*result.snapshot);
+    if (currentPage != PAGE_TTT && currentPage != PAGE_REACTION && currentPage != PAGE_GAMES &&
+        currentPage != PAGE_PHOTOS && currentPage != PAGE_SCREENSAVER) drawCurrentPage();
+  } else if (result.outcome == StatusOutcome::ReconnectFailed || result.outcome == StatusOutcome::HttpFailed) {
+    serverOnline = false;
+    if (result.outcome == StatusOutcome::ReconnectFailed && currentPage != PAGE_SCREENSAVER &&
+        currentPage != PAGE_TTT && currentPage != PAGE_REACTION) drawCurrentPage();
+  }
+  // The slot is released only after every String has been copied and drawing is done.
+  lastRefresh = millis();
+  statusInFlight = false;
+}
 
 
 // --------------------------------------------------
@@ -2752,6 +2913,9 @@ void setup() {
 
   randomSeed(micros());
 
+  setupStatusWorker();
+  drawCurrentPage();
+
   fetchHomelabStatus();
 
   fetchPhotoList();
@@ -2761,8 +2925,6 @@ void setup() {
   calendarYear = currentYear;
 
   calendarMonth = currentMonth;
-
-  lastRefresh = millis();
 
   lastInteraction = millis();
 
@@ -2780,11 +2942,11 @@ void loop() {
 
   updateScreensaver();
 
+  processStatusResult();
+
 
 
   if (millis() - lastRefresh >= REFRESH_INTERVAL) {
-
-    lastRefresh = millis();
 
     if (currentPage != PAGE_TTT && currentPage != PAGE_REACTION && currentPage != PAGE_GAMES && currentPage != PAGE_PHOTOS) {
 
