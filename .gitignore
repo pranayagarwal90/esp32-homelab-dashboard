@@ -30,3 +30,5 @@ firmware/include/secrets.h
 firmware/.pio/
 firmware/.vscode/
 !firmware/include/secrets.example.h
+.venv-platformio/
+.venv-platformio/
