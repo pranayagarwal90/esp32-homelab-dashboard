@@ -148,3 +148,37 @@ An individual photo returned HTTP 200 with image/jpeg content type. The existing
 `./deploy-esp32.sh` workflow built both firmware copies and completed OTA to
 `192.168.1.18` with device result OK. The deployment script and Windows secrets
 file were unchanged. Physical screen rendering still requires a visual check.
+
+## Automatic backlight brightness
+
+The backend requests sunrise/sunset with the existing Open-Meteo weather
+request and 15-minute cache. It requests two forecast days to cover the night
+across midnight; a new local date refreshes the cache. Existing weather fields
+are preserved. Optional `weather` fields are integer UTC epoch seconds:
+
+- `sunrise_timestamp`, `sunset_timestamp`: today's solar transitions.
+- `solar_day_start`, `solar_day_end`: local midnight boundaries, using
+  `America/New_York` and its DST rules.
+- `solar_valid_until`: tomorrow's sunrise, or today's ending midnight if
+  tomorrow's sunrise is unavailable. Solar fields are omitted if today's
+  solar values are invalid; weather remains available independently.
+
+Firmware compares these values against the status `timestamp`, advancing it
+with `millis()` between responses. GPIO 21 uses active-high LEDC channel 0,
+5 kHz, 8-bit PWM: day 100% (255), night 15% (38), touch boost 60% (153).
+An accepted night touch restarts a nonblocking 30-second boost. Day touches
+leave full brightness unchanged. Invalid or expired solar data and PWM setup
+failure use full brightness. PWM duty is written only when it changes, and
+TFT_eSPI no longer independently drives the backlight during initialization.
+Startup uses full brightness until the first valid status is applied.
+
+Run the isolated checks and build without uploading:
+
+```sh
+python3 -m py_compile backend/server.py backend/test_weather.py
+python3 -m unittest discover -s backend -p 'test_*.py' -v
+g++ -std=c++11 -Wall -Wextra -Werror -Ifirmware/include firmware/test/test_backlight.cpp -o /tmp/test-backlight
+/tmp/test-backlight
+pio run -d firmware -e esp32dev
+git diff --check
+```

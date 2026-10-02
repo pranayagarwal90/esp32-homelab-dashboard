@@ -20,6 +20,34 @@
 #include <SPI.h>
 
 #include "secrets.h"
+#include "BacklightControl.h"
+
+static BacklightControl backlight;
+static constexpr uint8_t BACKLIGHT_CHANNEL = 0;
+static int appliedBacklightDuty = -1;
+static bool backlightPwmReady = false;
+
+void updateBacklight() {
+  if (!backlightPwmReady) return;
+  int duty = backlight.duty(millis());
+  if (duty != appliedBacklightDuty) {
+    ledcWrite(BACKLIGHT_CHANNEL, duty);
+    appliedBacklightDuty = duty;
+  }
+}
+
+void setupBacklight() {
+  pinMode(DASHBOARD_BACKLIGHT_PIN, OUTPUT);
+  digitalWrite(DASHBOARD_BACKLIGHT_PIN, HIGH);
+  if (ledcSetup(BACKLIGHT_CHANNEL, 5000, 8) == 0) {
+    Serial.println("Backlight PWM unavailable; using full brightness");
+    return;
+  }
+  ledcAttachPin(DASHBOARD_BACKLIGHT_PIN, BACKLIGHT_CHANNEL);
+  backlightPwmReady = true;
+  appliedBacklightDuty = -1;
+  updateBacklight();
+}
 
 
 
@@ -2024,6 +2052,7 @@ void drawCurrentPage() {
 // A single slot, transferred through queues. The worker cannot reuse it until
 // the main task has consumed the result and submitted the next request.
 struct StatusSnapshot {
+  SolarSchedule solar;
   float uptimeHours;
   float cpuPercent;
   float memUsed;
@@ -2251,6 +2280,18 @@ StatusOutcome readStatus(const StatusRequest& request, StatusSnapshot& snapshot)
 
   snapshot.weatherAvailable = doc["weather"]["available"] | false;
 
+  // Strict numeric parsing: missing/null/string/negative values invalidate the
+  // entire schedule rather than interpreting absent sunrise as midnight.
+  auto epochField = [](JsonVariantConst value) -> uint32_t {
+    return value.is<uint32_t>() ? value.as<uint32_t>() : 0;
+  };
+  snapshot.solar.sunrise = epochField(doc["weather"]["sunrise_timestamp"]);
+  snapshot.solar.sunset = epochField(doc["weather"]["sunset_timestamp"]);
+  snapshot.solar.dayStart = epochField(doc["weather"]["solar_day_start"]);
+  snapshot.solar.dayEnd = epochField(doc["weather"]["solar_day_end"]);
+  snapshot.solar.validUntil = epochField(doc["weather"]["solar_valid_until"]);
+  snapshot.solar.timestamp = epochField(doc["timestamp"]);
+
   if (snapshot.weatherAvailable) {
 
     snapshot.temperatureC = doc["weather"]["temperature_c"] | 0.0;
@@ -2302,6 +2343,8 @@ void fetchHomelabStatus() {
 }
 
 void applyStatusSnapshot(const StatusSnapshot& snapshot) {
+  backlight.setSchedule(snapshot.solar, millis());
+  updateBacklight();
   uptimeHours = snapshot.uptimeHours;
   cpuPercent = snapshot.cpuPercent;
   memUsed = snapshot.memUsed;
@@ -2488,6 +2531,9 @@ void handleTouch() {
 
 
   lastInteraction = millis();
+
+  backlight.acceptedTouch(lastInteraction);
+  updateBacklight();
 
   Serial.printf("Touch X=%d Y=%d\n", x, y);
 
@@ -2879,13 +2925,8 @@ void setup() {
 
 
 
-  pinMode(21, OUTPUT);
-
-  digitalWrite(21, HIGH);
-
-
-
   tft.init();
+  setupBacklight();
 
   tft.setRotation(1);
 
@@ -2943,6 +2984,7 @@ void loop() {
   updateScreensaver();
 
   processStatusResult();
+  updateBacklight();
 
 
 
