@@ -78,17 +78,17 @@ void updateScreensaver() {
   }
 
   if (millis() - screensaverLastRotate < SCREENSAVER_ROTATE) return;
+  // Never start a rotation while the previous photo is still downloading.
+  if (isScreensaverPhotoPending()) return;
   screensaverLastRotate = millis();
 
-  ensurePhotoListLoaded();
+  // The clock stays up until the photo arrives; onScreensaverPhotoResult()
+  // completes the rotation.
+  if (!screensaverShowingPhoto && requestScreensaverPhoto()) return;
+  drawScreensaverClock();
+}
 
-  if (hasPhotos() && !screensaverShowingPhoto) {
-    if (showScreensaverPhoto()) {
-      screensaverShowingPhoto = true;
-    } else {
-      drawScreensaverClock();
-    }
-  } else {
-    drawScreensaverClock();
-  }
+void onScreensaverPhotoResult(bool shown) {
+  if (shown) screensaverShowingPhoto = true;
+  else drawScreensaverClock();
 }

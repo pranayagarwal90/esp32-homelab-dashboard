@@ -13,8 +13,8 @@
 #include "TouchHandler.h"
 #include "games/ReactionGame.h"
 
-// All TFT drawing happens on this (the Arduino loop) task. The status worker
-// created by setupStatusWorker() only fills a snapshot and never draws.
+// All TFT drawing and JPEG decoding happen on this (the Arduino loop) task.
+// The status and photo workers only do network I/O and never draw.
 TFT_eSPI tft = TFT_eSPI();
 
 void setup() {
@@ -35,7 +35,7 @@ void setup() {
   setupStatusWorker();
   drawCurrentPage();
   fetchHomelabStatus();
-  fetchPhotoList();
+  requestPhotoList();
 
   setCalendarMonth(app.time.currentYear, app.time.currentMonth);
   app.lastInteraction = millis();
@@ -46,6 +46,7 @@ void loop() {
   handleTouch();
   updateReactionGame();
   updateScreensaver();
+  updatePhotos();
   processStatusResult();
   updateBacklight();
 

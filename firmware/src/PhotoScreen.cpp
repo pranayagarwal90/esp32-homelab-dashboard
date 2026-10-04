@@ -1,20 +1,23 @@
 #include <Arduino.h>
-#include <WiFi.h>
-#include <HTTPClient.h>
-#include <ArduinoJson.h>
 #include <TJpg_Decoder.h>
 #include "PhotoScreen.h"
-#include "ApiConfig.h"
 #include "AppState.h"
 #include "Display.h"
 #include "PageRouter.h"
+#include "PhotoClient.h"
+#include "PhotoRequestTracker.h"
+#include "Screensaver.h"
 #include "UiHelpers.h"
 
-#define MAX_PHOTOS 20
-static String photoNames[MAX_PHOTOS];
+static String photoNames[PHOTO_LIST_MAX];
 static int photoCount = 0;
 static int photoIndex = 0;
 static bool photoListLoaded = false;
+
+static PhotoRequestTracker photoTracker;
+static bool listPrefetchPending = false;
+static int inFlightIndex = 0;      // Photo index of the in-flight Image job.
+static bool photoPageShown = false; // The TFT currently shows Photos-page content.
 
 static bool tftOutput(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t *bitmap) {
   if (y >= tft.height()) return 0;
@@ -26,152 +29,182 @@ void setupPhotoDecoder() {
   TJpgDec.setJpgScale(1);
   TJpgDec.setSwapBytes(true);
   TJpgDec.setCallback(tftOutput);
+  setupPhotoWorker();
 }
 
-void fetchPhotoList() {
-  if (WiFi.status() != WL_CONNECTED) return;
+static void drawPhotoControls() {
+  tft.fillRect(0, 208, 106, 32, TFT_DARKGREY);
+  tft.fillRect(106, 208, 108, 32, TFT_DARKGREY);
+  tft.fillRect(214, 208, 106, 32, TFT_DARKGREY);
+  tft.setTextSize(1);
+  tft.setTextColor(TFT_WHITE, TFT_DARKGREY);
+  tft.setCursor(36, 220); tft.print("< PREV");
+  tft.setCursor(145, 220); tft.print("BACK");
+  tft.setCursor(250, 220); tft.print("NEXT >");
+}
 
-  HTTPClient http;
-  http.setTimeout(6000);
-  http.setReuse(false);
-  http.begin(API_PHOTOS);
-  int code = http.GET();
+static void drawNoPhotos() {
+  tft.fillScreen(TFT_BLACK);
+  tft.setTextSize(2);
+  tft.setTextColor(TFT_YELLOW, TFT_BLACK);
+  tft.setCursor(60, 80);
+  tft.print("NO PHOTOS");
+  tft.setTextSize(1);
+  tft.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+  tft.setCursor(32, 120);
+  tft.print("Add photos on HomeServer");
+  drawBackBar(nullptr, "BACK", nullptr);
+}
 
-  if (code != HTTP_CODE_OK) {
-    Serial.printf("Photo list HTTP error: %d\n", code);
-    http.end();
-    return;
-  }
+static void drawPhotoError() {
+  tft.fillScreen(TFT_BLACK);
+  tft.setTextSize(2);
+  tft.setTextColor(TFT_RED, TFT_BLACK);
+  tft.setCursor(45, 90);
+  tft.print("PHOTO ERROR");
+  drawBackBar(nullptr, "BACK", nullptr);
+}
 
-  JsonDocument doc;
-  DeserializationError err = deserializeJson(doc, http.getString());
-  if (err) {
-    Serial.print("Photo list JSON error: ");
-    Serial.println(err.c_str());
-    http.end();
-    return;
-  }
-
+static void applyPhotoList(const PhotoList& list) {
   photoCount = 0;
-  for (JsonVariant item : doc["photos"].as<JsonArray>()) {
-    if (photoCount >= MAX_PHOTOS) break;
-    photoNames[photoCount++] = item.as<String>();
-  }
+  for (int i = 0; i < list.count && i < PHOTO_LIST_MAX; i++) photoNames[photoCount++] = list.names[i];
   photoListLoaded = true;
   if (photoIndex >= photoCount) photoIndex = 0;
-  http.end();
 }
 
-void ensurePhotoListLoaded() {
-  if (!photoListLoaded) fetchPhotoList();
-}
+static void handlePhotoResult(PhotoResult& result);
 
-bool hasPhotos() {
-  return photoCount > 0;
-}
+// Submits the next job if the slot is free: the wanted photo (or the list it
+// needs first), otherwise the boot prefetch. Never blocks.
+static void pumpPhotoRequests() {
+  if (photoTracker.busy()) return;
 
-static bool showPhoto(int index, bool overlayControls) {
-  if (!photoListLoaded) fetchPhotoList();
-  if (photoCount == 0 || index < 0 || index >= photoCount) return false;
-
-  String url = String(API_BASE) + "/photos/" + photoNames[index];
-  HTTPClient http;
-  http.setTimeout(10000);
-  http.setReuse(false);
-  http.begin(url);
-  int code = http.GET();
-
-  if (code != HTTP_CODE_OK) {
-    Serial.printf("Photo HTTP error: %d\n", code);
-    http.end();
-    return false;
-  }
-
-  int len = http.getSize();
-  if (len <= 0 || len > 130000) {
-    Serial.printf("Photo size invalid: %d bytes\n", len);
-    http.end();
-    return false;
-  }
-
-  uint8_t* buffer = (uint8_t*)malloc(len);
-  if (!buffer) {
-    Serial.println("Not enough RAM for JPEG");
-    http.end();
-    return false;
-  }
-
-  WiFiClient* stream = http.getStreamPtr();
-  int total = 0;
-  unsigned long deadline = millis() + 10000;
-
-  while (total < len && millis() < deadline) {
-    int available = stream->available();
-    if (available > 0) {
-      int toRead = min(available, len - total);
-      int read = stream->readBytes(buffer + total, toRead);
-      if (read > 0) total += read;
+  PhotoJob job = {};
+  if (photoTracker.needsRequest()) {
+    job.generation = photoTracker.wantedGeneration();
+    if (!photoListLoaded) {
+      job.type = PhotoJobType::List;
     } else {
-      delay(1);
+      job.type = PhotoJobType::Image;
+      inFlightIndex = photoIndex;
+      size_t length = photoNames[photoIndex].length();
+      if (length >= sizeof(job.name)) {
+        Serial.printf("Photo name too long: %u bytes\n", (unsigned)length);
+        PhotoResult failed = {job.generation, job.type, false, nullptr, nullptr, 0};
+        photoTracker.sent();
+        handlePhotoResult(failed);
+        return;
+      }
+      memcpy(job.name, photoNames[photoIndex].c_str(), length + 1);
     }
+  } else if (listPrefetchPending && !photoListLoaded) {
+    job.generation = PhotoRequestTracker::UNTRACKED;
+    job.type = PhotoJobType::List;
+  } else {
+    return;
   }
+  if (job.type == PhotoJobType::List) listPrefetchPending = false;
 
-  bool ok = false;
-  if (total == len) {
-    tft.fillScreen(TFT_BLACK);
-    TJpgDec.drawJpg(0, 0, buffer, len);
-    ok = true;
+  photoTracker.sent();
+  if (!submitPhotoJob(job)) {
+    // No worker: fail the job now so callers fall back as on a network error.
+    PhotoResult failed = {job.generation, job.type, false, nullptr, nullptr, 0};
+    handlePhotoResult(failed);
   }
-
-  free(buffer);
-  http.end();
-
-  if (overlayControls) {
-    tft.fillRect(0, 208, 106, 32, TFT_DARKGREY);
-    tft.fillRect(106, 208, 108, 32, TFT_DARKGREY);
-    tft.fillRect(214, 208, 106, 32, TFT_DARKGREY);
-    tft.setTextSize(1);
-    tft.setTextColor(TFT_WHITE, TFT_DARKGREY);
-    tft.setCursor(36, 220); tft.print("< PREV");
-    tft.setCursor(145, 220); tft.print("BACK");
-    tft.setCursor(250, 220); tft.print("NEXT >");
-  }
-
-  return ok;
 }
 
-bool showScreensaverPhoto() {
-  if (!showPhoto(photoIndex, false)) return false;
-  photoIndex = (photoIndex + 1) % photoCount;
+static void handlePhotoResult(PhotoResult& result) {
+  bool isList = result.type == PhotoJobType::List;
+  // Copy the list before anything can submit a new job (slot ownership).
+  if (isList && result.ok && result.list) applyPhotoList(*result.list);
+
+  PhotoPurpose purpose = photoTracker.wanted();
+  bool current = photoTracker.complete(result.generation);
+  PhotoAction action = decidePhotoAction(isList, result.ok, current, purpose, photoCount);
+  if (action != PhotoAction::RequestImage && action != PhotoAction::Discard) photoTracker.fulfil();
+
+  switch (action) {
+    case PhotoAction::Discard:
+    case PhotoAction::RequestImage:
+      break;
+    case PhotoAction::ShowNoPhotos:
+      drawNoPhotos();
+      break;
+    case PhotoAction::ShowPagePhoto:
+      tft.fillScreen(TFT_BLACK);
+      TJpgDec.drawJpg(0, 0, result.jpeg, result.jpegLength);
+      drawPhotoControls();
+      break;
+    case PhotoAction::ShowPageError:
+      drawPhotoError();
+      break;
+    case PhotoAction::ShowScreensaverPhoto:
+      tft.fillScreen(TFT_BLACK);
+      TJpgDec.drawJpg(0, 0, result.jpeg, result.jpegLength);
+      photoIndex = (inFlightIndex + 1) % photoCount;
+      onScreensaverPhotoResult(true);
+      break;
+    case PhotoAction::ScreensaverFallback:
+      onScreensaverPhotoResult(false);
+      break;
+  }
+
+  // Every path releases the buffer: drawn, stale, cancelled or failed.
+  free(result.jpeg);
+  result.jpeg = nullptr;
+  pumpPhotoRequests();
+}
+
+void updatePhotos() {
+  // Cancel before draining, so a result for a page that was just left is
+  // discarded rather than drawn over the new page.
+  if (app.currentPage != PAGE_PHOTOS) {
+    photoPageShown = false;
+    photoTracker.cancel(PhotoPurpose::Page);
+  }
+  if (app.currentPage != PAGE_SCREENSAVER) photoTracker.cancel(PhotoPurpose::Screensaver);
+
+  PhotoResult result;
+  if (receivePhotoResult(result)) handlePhotoResult(result);
+  else pumpPhotoRequests();
+}
+
+void requestPhotoList() {
+  listPrefetchPending = true;
+  pumpPhotoRequests();
+}
+
+bool requestScreensaverPhoto() {
+  if (photoListLoaded && photoCount == 0) return false;
+  photoTracker.want(PhotoPurpose::Screensaver);
+  pumpPhotoRequests();
   return true;
+}
+
+bool isScreensaverPhotoPending() {
+  return photoTracker.wanted() == PhotoPurpose::Screensaver;
 }
 
 void drawPhotosPage() {
   app.currentPage = PAGE_PHOTOS;
-  if (!photoListLoaded) fetchPhotoList();
 
-  if (photoCount == 0) {
-    tft.fillScreen(TFT_BLACK);
-    tft.setTextSize(2);
-    tft.setTextColor(TFT_YELLOW, TFT_BLACK);
-    tft.setCursor(60, 80);
-    tft.print("NO PHOTOS");
-    tft.setTextSize(1);
-    tft.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
-    tft.setCursor(32, 120);
-    tft.print("Add photos on HomeServer");
-    drawBackBar(nullptr, "BACK", nullptr);
+  if (photoListLoaded && photoCount == 0) {
+    photoTracker.cancel(PhotoPurpose::Page);
+    photoPageShown = true;
+    drawNoPhotos();
     return;
   }
 
-  if (!showPhoto(photoIndex, true)) {
+  // On entry, replace the previous page so its buttons are not mistaken for
+  // these controls while the photo loads. NEXT/PREV keep the current photo on
+  // screen until the new one arrives, as before.
+  if (!photoPageShown) {
     tft.fillScreen(TFT_BLACK);
-    tft.setTextSize(2);
-    tft.setTextColor(TFT_RED, TFT_BLACK);
-    tft.setCursor(45, 90);
-    tft.print("PHOTO ERROR");
-    drawBackBar(nullptr, "BACK", nullptr);
+    drawPhotoControls();
+    photoPageShown = true;
   }
+  photoTracker.want(PhotoPurpose::Page);
+  pumpPhotoRequests();
 }
 
 void handlePhotosTouch(int x, int y) {
