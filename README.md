@@ -178,6 +178,8 @@ Run the isolated checks and build without uploading:
 python3 -m py_compile backend/server.py backend/test_weather.py
 python3 -m unittest discover -s backend -p 'test_*.py' -v
 g++ -std=c++11 -Wall -Wextra -Werror -Ifirmware/include firmware/test/test_backlight.cpp -o /tmp/test-backlight
+g++ -std=c++11 -Wall -Wextra -Werror -Ifirmware/include firmware/test/test_photo_requests.cpp -o /tmp/test-photo-requests
+/tmp/test-photo-requests
 /tmp/test-backlight
 pio run -d firmware -e esp32dev
 git diff --check
@@ -197,9 +199,12 @@ subsystem has a header in `firmware/include/` and a source in `firmware/src/`:
 | `games/TicTacToe`, `games/ReactionGame` | Game state, drawing, touch, timing |
 | `TouchHandler` | XPT2046 read, calibration, debounce, wake, backlight boost, dispatch |
 | `StatusClient` | FreeRTOS `/api/status` worker, snapshot hand-off, refresh timing |
+| `PhotoClient` | FreeRTOS worker for `/api/photos` and JPEG downloads; hands the JPEG buffer to the main task |
+| `PhotoRequestTracker.h` | Pure, host-tested request generations: stale or cancelled photo results are discarded |
 | `NetworkManager`, `OtaManager`, `BacklightPwm` | Wi-Fi connect/reconnect, ArduinoOTA, LEDC driver |
 
-TFT drawing happens only on the Arduino loop task; the status worker fills a
-private snapshot and never draws. `deploy-esp32.sh` mirrors all of
-`firmware/src/` (deleting stale files) and copies `firmware/include/` to the
-Windows project, never copying or deleting `secrets.h`.
+TFT drawing and JPEG decoding happen only on the Arduino loop task; the
+status and photo workers only do network I/O and never draw.
+`deploy-esp32.sh` mirrors all of `firmware/src/` (deleting stale files) and
+copies `firmware/include/` to the Windows project, never copying or deleting
+`secrets.h`.
