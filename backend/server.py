@@ -1,7 +1,7 @@
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from http.client import HTTPConnection, HTTPSConnection
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
+from datetime import datetime, time as datetime_time, timedelta
 from pathlib import Path
 from urllib.parse import unquote, urlencode, urlsplit
 from urllib.request import urlopen
@@ -20,9 +20,11 @@ HOST_METRICS_CACHE_SECONDS = 2
 WEATHER_LAT = 39.04
 WEATHER_LON = -77.49
 WEATHER_CACHE_SECONDS = 900
+LOCAL_TIMEZONE = "America/New_York"
 
 _weather_cache = None
 _weather_cache_time = 0
+_weather_cache_day = None
 
 _host_cache = None
 _host_cache_time = 0
@@ -300,7 +302,7 @@ def service_status(docker):
 
 def get_times():
     zones = {
-        "local": "America/New_York",
+        "local": LOCAL_TIMEZONE,
         "india": "Asia/Kolkata",
         "singapore": "Asia/Singapore",
         "london": "Europe/London",
@@ -348,11 +350,51 @@ def weather_description(code):
     return descriptions.get(code, "Unknown")
 
 
+def solar_times(daily):
+    """Isolate optional solar parsing so a bad field cannot break weather."""
+    try:
+        zone = ZoneInfo(LOCAL_TIMEZONE)
+        day = datetime.fromisoformat(daily["time"][0]).date()
+        start = datetime.combine(day, datetime_time.min, zone)
+        end = datetime.combine(day + timedelta(days=1), datetime_time.min, zone)
+        values = {}
+        for name in ("sunrise", "sunset"):
+            event = datetime.fromisoformat(daily[name][0])
+            if event.tzinfo is None:
+                event = event.replace(tzinfo=zone)
+            event = event.astimezone(zone)
+            if event.date() != day:
+                return {}
+            values[name + "_timestamp"] = int(event.timestamp())
+        if values["sunrise_timestamp"] >= values["sunset_timestamp"]:
+            return {}
+        # Cover the night across midnight without briefly selecting the full-
+        # brightness fallback while the next day's status is being fetched.
+        valid_until = int(end.timestamp())
+        try:
+            next_rise = datetime.fromisoformat(daily["sunrise"][1])
+            if next_rise.tzinfo is None:
+                next_rise = next_rise.replace(tzinfo=zone)
+            next_rise = next_rise.astimezone(zone)
+            if (next_rise.date() == day + timedelta(days=1)
+                    and next_rise > end):
+                valid_until = int(next_rise.timestamp())
+        except (IndexError, TypeError, ValueError):
+            pass
+        return {**values, "solar_day_start": int(start.timestamp()),
+                "solar_day_end": int(end.timestamp()),
+                "solar_valid_until": valid_until}
+    except (KeyError, IndexError, TypeError, ValueError):
+        return {}
+
+
 def get_weather():
-    global _weather_cache, _weather_cache_time
+    global _weather_cache, _weather_cache_time, _weather_cache_day
 
     now = time.time()
-    if _weather_cache and now - _weather_cache_time < WEATHER_CACHE_SECONDS:
+    local_day = datetime.fromtimestamp(now, ZoneInfo(LOCAL_TIMEZONE)).date()
+    if (_weather_cache and now - _weather_cache_time < WEATHER_CACHE_SECONDS
+            and _weather_cache_day == local_day):
         return _weather_cache
 
     try:
@@ -361,10 +403,10 @@ def get_weather():
                 "latitude": WEATHER_LAT,
                 "longitude": WEATHER_LON,
                 "current": "temperature_2m,weather_code",
-                "daily": "temperature_2m_max,temperature_2m_min",
+                "daily": "temperature_2m_max,temperature_2m_min,sunrise,sunset",
                 "temperature_unit": "celsius",
-                "timezone": "America/New_York",
-                "forecast_days": 1,
+                "timezone": LOCAL_TIMEZONE,
+                "forecast_days": 2,
             }
         )
 
@@ -383,10 +425,12 @@ def get_weather():
             "low_c": round(daily["temperature_2m_min"][0], 1),
             "condition": weather_description(code),
             "weather_code": code,
+            **solar_times(daily),
         }
 
         _weather_cache = result
         _weather_cache_time = now
+        _weather_cache_day = local_day
         return result
 
     except Exception as e:
