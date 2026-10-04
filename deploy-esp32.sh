@@ -8,7 +8,7 @@ FIRMWARE_DIR="$ROOT_DIR/firmware"
 PIO="$ROOT_DIR/.venv-platformio/bin/pio"
 
 WINDOWS_PROJECT="/mnt/c/Users/Deepika/OneDrive/Documents/PlatformIO/Projects/esp32-cyd-homelab"
-WINDOWS_MAIN="$WINDOWS_PROJECT/src/main.cpp"
+WINDOWS_SRC="$WINDOWS_PROJECT/src"
 WINDOWS_PLATFORMIO="$WINDOWS_PROJECT/platformio.ini"
 WINDOWS_INCLUDE="$WINDOWS_PROJECT/include"
 
@@ -47,6 +47,11 @@ if [ ! -d "$FIRMWARE_DIR/include" ]; then
     exit 1
 fi
 
+if ! command -v rsync >/dev/null 2>&1; then
+    echo "ERROR: rsync is required to sync firmware sources."
+    exit 1
+fi
+
 if [ ! -d "$WINDOWS_PROJECT" ]; then
     echo "ERROR: Windows PlatformIO project not found:"
     echo "  $WINDOWS_PROJECT"
@@ -75,32 +80,27 @@ echo
 echo "[2/3] Syncing firmware to Windows PlatformIO project..."
 echo
 
-mkdir -p "$WINDOWS_PROJECT/src"
+mkdir -p "$WINDOWS_SRC"
 mkdir -p "$WINDOWS_INCLUDE"
 
-cp "$FIRMWARE_DIR/src/main.cpp" "$WINDOWS_MAIN"
 cp "$FIRMWARE_DIR/platformio.ini" "$WINDOWS_PLATFORMIO"
-
-echo "  Copied: src/main.cpp"
 echo "  Copied: platformio.ini"
 
-HEADER_COUNT=0
+# src/ is an exact mirror (including subdirectories such as src/games/), so a
+# file removed or renamed here cannot linger and be compiled twice on Windows.
+# --checksum avoids rewriting unchanged files in the OneDrive folder.
+# secrets.h is excluded, which also protects any Windows copy from --delete.
+rsync -r --checksum --delete --exclude='secrets.h' --out-format='  Synced: src/%n' \
+    "$FIRMWARE_DIR/src/" "$WINDOWS_SRC/"
 
-while IFS= read -r -d '' header; do
-    filename="$(basename "$header")"
-
-    if [ "$filename" = "secrets.h" ]; then
-        continue
-    fi
-
-    cp "$header" "$WINDOWS_INCLUDE/$filename"
-    echo "  Copied: include/$filename"
-    HEADER_COUNT=$((HEADER_COUNT + 1))
-done < <(find "$FIRMWARE_DIR/include" -maxdepth 1 -type f -print0)
+# include/ is additive: headers are copied recursively but nothing is deleted,
+# and the Windows include/secrets.h is never overwritten.
+rsync -r --checksum --exclude='secrets.h' --out-format='  Synced: include/%n' \
+    "$FIRMWARE_DIR/include/" "$WINDOWS_INCLUDE/"
 
 echo
-echo "Header files copied: $HEADER_COUNT"
-echo "NOTE: include/secrets.h was intentionally NOT copied."
+echo "Source files in Windows project: $(find "$WINDOWS_SRC" -type f | wc -l)"
+echo "NOTE: secrets.h was intentionally NOT copied."
 echo
 
 # --------------------------------------------------
