@@ -182,3 +182,24 @@ g++ -std=c++11 -Wall -Wextra -Werror -Ifirmware/include firmware/test/test_backl
 pio run -d firmware -e esp32dev
 git diff --check
 ```
+
+## Firmware layout
+
+`firmware/src/main.cpp` only wires up `setup()` and `loop()`. Each screen or
+subsystem has a header in `firmware/include/` and a source in `firmware/src/`:
+
+| Module | Responsibility |
+|---|---|
+| `AppState` | Page enum and the main-task copy of status data (`app`) |
+| `PageRouter` | `drawCurrentPage()` / `showPage()`; the only file that knows every screen |
+| `UiHelpers`, `Display` | Shared header/nav/back bars; the `tft` instance |
+| `HomeScreen`, `ServicesScreen`, `MenuScreens`, `TimeWeatherScreen`, `CalendarScreen`, `PhotoScreen`, `Screensaver` | One screen each: drawing and its touch zones |
+| `games/TicTacToe`, `games/ReactionGame` | Game state, drawing, touch, timing |
+| `TouchHandler` | XPT2046 read, calibration, debounce, wake, backlight boost, dispatch |
+| `StatusClient` | FreeRTOS `/api/status` worker, snapshot hand-off, refresh timing |
+| `NetworkManager`, `OtaManager`, `BacklightPwm` | Wi-Fi connect/reconnect, ArduinoOTA, LEDC driver |
+
+TFT drawing happens only on the Arduino loop task; the status worker fills a
+private snapshot and never draws. `deploy-esp32.sh` mirrors all of
+`firmware/src/` (deleting stale files) and copies `firmware/include/` to the
+Windows project, never copying or deleting `secrets.h`.
