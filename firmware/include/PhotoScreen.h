@@ -16,3 +16,7 @@ void handlePhotosTouch(int x, int y);
 // Call every loop(): drops requests for pages no longer shown, applies
 // finished downloads and submits the next request.
 void updatePhotos();
+// Read-only view of the loaded photo list (Settings > Wallpaper).
+bool photoListReady();
+int photoListCount();
+const char* photoListName(int index);

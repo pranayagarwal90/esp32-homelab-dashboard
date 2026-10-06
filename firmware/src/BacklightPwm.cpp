@@ -1,5 +1,7 @@
 #include <Arduino.h>
+#include <driver/gpio.h>
 #include "BacklightPwm.h"
+#include "SettingsStore.h"
 
 static BacklightControl backlight;
 static constexpr uint8_t BACKLIGHT_CHANNEL = 0;
@@ -16,6 +18,9 @@ void updateBacklight() {
 }
 
 void setupBacklight() {
+  // After waking from Settings > Sleep the pin is still held low.
+  gpio_hold_dis((gpio_num_t)DASHBOARD_BACKLIGHT_PIN);
+  gpio_deep_sleep_hold_dis();
   pinMode(DASHBOARD_BACKLIGHT_PIN, OUTPUT);
   digitalWrite(DASHBOARD_BACKLIGHT_PIN, HIGH);
   if (ledcSetup(BACKLIGHT_CHANNEL, 5000, 8) == 0) {
@@ -25,7 +30,7 @@ void setupBacklight() {
   ledcAttachPin(DASHBOARD_BACKLIGHT_PIN, BACKLIGHT_CHANNEL);
   backlightPwmReady = true;
   appliedBacklightDuty = -1;
-  updateBacklight();
+  backlightApplySettings();
 }
 
 void backlightSetSchedule(const SolarSchedule& schedule, uint32_t now) {
@@ -34,4 +39,18 @@ void backlightSetSchedule(const SolarSchedule& schedule, uint32_t now) {
 
 void backlightAcceptedTouch(uint32_t now) {
   backlight.acceptedTouch(now);
+}
+
+void backlightApplySettings() {
+  backlight.setLevels(backlightLevels(settings()));
+  updateBacklight();
+}
+
+void backlightOffForSleep() {
+  if (backlightPwmReady) ledcDetachPin(DASHBOARD_BACKLIGHT_PIN);
+  backlightPwmReady = false;
+  pinMode(DASHBOARD_BACKLIGHT_PIN, OUTPUT);
+  digitalWrite(DASHBOARD_BACKLIGHT_PIN, LOW);
+  gpio_hold_en((gpio_num_t)DASHBOARD_BACKLIGHT_PIN);
+  gpio_deep_sleep_hold_en();
 }

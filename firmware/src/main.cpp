@@ -2,13 +2,17 @@
 #include <TFT_eSPI.h>
 #include "AppState.h"
 #include "BacklightPwm.h"
+#include "BluetoothControl.h"
 #include "CalendarScreen.h"
 #include "Display.h"
 #include "NetworkManager.h"
 #include "OtaManager.h"
 #include "PageRouter.h"
+#include "PowerManager.h"
 #include "PhotoScreen.h"
 #include "Screensaver.h"
+#include "SettingsScreen.h"
+#include "SettingsStore.h"
 #include "StatusClient.h"
 #include "TouchHandler.h"
 #include "games/ReactionGame.h"
@@ -20,7 +24,9 @@ TFT_eSPI tft = TFT_eSPI();
 void setup() {
   Serial.begin(115200);
   delay(500);
+  logWakeReason();
 
+  loadSettings();
   tft.init();
   setupBacklight();
   tft.setRotation(1);
@@ -32,6 +38,7 @@ void setup() {
   setupOTA();
   randomSeed(micros());
 
+  setupBluetooth();
   setupStatusWorker();
   drawCurrentPage();
   fetchHomelabStatus();
@@ -47,6 +54,7 @@ void loop() {
   updateReactionGame();
   updateScreensaver();
   updatePhotos();
+  updateSettings();
   processStatusResult();
   updateBacklight();
 

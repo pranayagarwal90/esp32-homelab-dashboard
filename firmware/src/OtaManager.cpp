@@ -4,7 +4,7 @@
 #include "Display.h"
 
 void setupOTA() {
-  ArduinoOTA.setHostname("homelab-display");
+  ArduinoOTA.setHostname(DEVICE_HOSTNAME);
 
   ArduinoOTA.onStart([]() {
     tft.fillScreen(TFT_BLACK);
@@ -36,7 +36,7 @@ void setupOTA() {
   });
 
   ArduinoOTA.begin();
-  Serial.println("OTA ready: homelab-display");
+  Serial.printf("OTA ready: %s\n", DEVICE_HOSTNAME);
 }
 
 void handleOTA() {

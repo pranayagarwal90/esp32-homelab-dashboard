@@ -179,6 +179,8 @@ python3 -m py_compile backend/server.py backend/test_weather.py
 python3 -m unittest discover -s backend -p 'test_*.py' -v
 g++ -std=c++11 -Wall -Wextra -Werror -Ifirmware/include firmware/test/test_backlight.cpp -o /tmp/test-backlight
 g++ -std=c++11 -Wall -Wextra -Werror -Ifirmware/include firmware/test/test_photo_requests.cpp -o /tmp/test-photo-requests
+g++ -std=c++11 -Wall -Wextra -Werror -Ifirmware/include firmware/test/test_settings.cpp -o /tmp/test-settings
+/tmp/test-settings
 /tmp/test-photo-requests
 /tmp/test-backlight
 pio run -d firmware -e esp32dev
@@ -200,6 +202,11 @@ subsystem has a header in `firmware/include/` and a source in `firmware/src/`:
 | `TouchHandler` | XPT2046 read, calibration, debounce, wake, backlight boost, dispatch |
 | `StatusClient` | FreeRTOS `/api/status` worker, snapshot hand-off, refresh timing |
 | `PhotoClient` | FreeRTOS worker for `/api/photos` and JPEG downloads; hands the JPEG buffer to the main task |
+| `SettingsScreen`, `DisplaySettingsScreen`, `WifiSettingsScreen` | MORE > SETTINGS menu and its sub-pages |
+| `DeviceSettings.h`, `SettingsLogic.h` | Pure, host-tested settings model, NVS encoding, navigation and formatting |
+| `SettingsStore` | NVS persistence (debounced, change-only writes) and the saved Wi-Fi network |
+| `WifiProvisioning` | Temporary setup hotspot and web form, served from its own task |
+| `PowerManager`, `BluetoothControl` | Restart, deep sleep, boot-time Bluetooth controller |
 | `PhotoRequestTracker.h` | Pure, host-tested request generations: stale or cancelled photo results are discarded |
 | `NetworkManager`, `OtaManager`, `BacklightPwm` | Wi-Fi connect/reconnect, ArduinoOTA, LEDC driver |
 
@@ -208,3 +215,28 @@ status and photo workers only do network I/O and never draw.
 `deploy-esp32.sh` mirrors all of `firmware/src/` (deleting stale files) and
 copies `firmware/include/` to the Windows project, never copying or deleting
 `secrets.h`.
+
+## Settings
+
+MORE > SETTINGS has Wi-Fi, Display, Screensaver, Bluetooth, Wallpaper, Device
+Info, Restart and Sleep. Settings are stored in NVS (namespace `settings`) and
+defaults reproduce the previous fixed behaviour (auto brightness 100/15/60%,
+3 min screensaver, 30 s photo/clock rotation, Bluetooth off).
+
+- **Wi-Fi > Change Wi-Fi** opens a hotspot `Homelab-Setup-XXXX` whose random
+  password is shown only on the display. Join it, open `http://192.168.4.1`
+  and submit the network. The dashboard stays online meanwhile; if the new
+  network fails within 20 s the previous one is restored. The saved network
+  is stored in NVS (namespace `wifi`, not encrypted) and `secrets.h` remains
+  the fallback. **Use built-in** forgets the saved network.
+- **Bluetooth** is not compiled in by default (the controller library costs
+  ~149 KB flash and ~5 KB RAM even when off); the page then says so. To
+  enable it, add `-D DASHBOARD_BLUETOOTH=1` to `build_flags` in
+  `firmware/platformio.ini`. With it, Bluetooth is a boot-time preference
+  (default off): the core frees Bluetooth memory at boot when it is off, so
+  changes apply after a restart. Only the controller is started; there are no
+  Bluetooth services yet.
+- **Sleep** is deep sleep, not power-off (the board has no power switch
+  control). RST always wakes it; touch wake (GPIO36) is attempted but not yet
+  verified on this board: "Wake: tap screen if supported, or press RST."
+- **Wallpaper** selects the photo the screensaver shows, or rotates all photos.
