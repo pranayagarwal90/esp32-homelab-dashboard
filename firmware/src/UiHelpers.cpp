@@ -64,3 +64,13 @@ void drawBackBar(const char* left, const char* center, const char* right) {
     tft.print(right);
   }
 }
+
+void drawMenuButton(int x, int y, int w, int h, const char* label) {
+  tft.fillRoundRect(x, y, w, h, 8, TFT_DARKGREY);
+  tft.drawRoundRect(x, y, w, h, 8, TFT_LIGHTGREY);
+  tft.setTextSize(1);
+  tft.setTextColor(TFT_WHITE, TFT_DARKGREY);
+  int textWidth = tft.textWidth(label);
+  tft.setCursor(x + (w - textWidth) / 2, y + (h / 2) - 3);
+  tft.print(label);
+}

@@ -9,6 +9,7 @@
 #include "PageRouter.h"
 #include "PhotoScreen.h"
 #include "Screensaver.h"
+#include "SettingsScreen.h"
 #include "TimeWeatherScreen.h"
 #include "games/ReactionGame.h"
 #include "games/TicTacToe.h"
@@ -77,6 +78,10 @@ void handleTouch() {
     handleTimeTouch(x, y);
     return;
   }
+  if (app.currentPage == PAGE_SETTINGS) {
+    handleSettingsTouch(x, y);
+    return;
+  }
   // MORE menu touches outside its buttons fall through to the nav bar.
   if (app.currentPage == PAGE_MORE && handleMoreTouch(x, y)) return;
 
@@ -85,4 +90,8 @@ void handleTouch() {
     else if (x < 214) showPage(PAGE_SERVICES);
     else showPage(PAGE_MORE);
   }
+}
+
+bool touchPressed() {
+  return touch.touched();
 }

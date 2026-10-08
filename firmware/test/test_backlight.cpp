@@ -71,5 +71,41 @@ int main() {
   assert(control.duty(1) == 255); // Day cancels an active boost.
   control.setSchedule(schedule(19 * 3600), 2);
   assert(control.duty(2) == 38);
-  puts("Backlight tests passed: day/night, boundaries, midnight, missing/invalid, boost, rollover");
+
+  // Configured levels replace the fixed duties.
+  BacklightControl custom;
+  BacklightControl::Levels levels;
+  levels.day = 200;
+  levels.night = 13;
+  levels.boost = 100;
+  custom.setLevels(levels);
+  custom.setSchedule(schedule(12 * 3600), 0);
+  assert(custom.duty(0) == 200);
+  custom.setSchedule(schedule(23 * 3600), 0);
+  assert(custom.duty(0) == 13);
+  custom.acceptedTouch(10);
+  assert(custom.duty(10) == 100);
+  assert(custom.duty(30010) == 13);
+
+  // Manual mode: fixed duty day and night, touches never boost, and switching
+  // to manual cancels an active boost.
+  custom.acceptedTouch(40000);
+  assert(custom.duty(40000) == 100);
+  levels.automatic = false;
+  levels.manual = 64;
+  custom.setLevels(levels);
+  assert(custom.duty(40001) == 64);
+  custom.acceptedTouch(40002);
+  assert(custom.duty(40002) == 64);
+  custom.setSchedule(schedule(12 * 3600), 0);
+  assert(custom.duty(0) == 64);
+  BacklightControl manualNoSchedule;
+  manualNoSchedule.setLevels(levels);
+  assert(manualNoSchedule.duty(0) == 64); // Manual also applies without solar data.
+  levels.automatic = true;
+  custom.setLevels(levels);
+  custom.setSchedule(schedule(23 * 3600), 0);
+  assert(custom.duty(50000) == 13); // Back to auto: night level, no stale boost.
+
+  puts("Backlight tests passed: day/night, boundaries, midnight, missing/invalid, boost, rollover, levels, manual");
 }

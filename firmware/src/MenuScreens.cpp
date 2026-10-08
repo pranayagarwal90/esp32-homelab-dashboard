@@ -4,28 +4,20 @@
 #include "CalendarScreen.h"
 #include "Display.h"
 #include "PageRouter.h"
+#include "SettingsScreen.h"
 #include "UiHelpers.h"
 #include "games/TicTacToe.h"
-
-static void drawMenuButton(int x, int y, int w, int h, const char* label) {
-  tft.fillRoundRect(x, y, w, h, 8, TFT_DARKGREY);
-  tft.drawRoundRect(x, y, w, h, 8, TFT_LIGHTGREY);
-  tft.setTextSize(1);
-  tft.setTextColor(TFT_WHITE, TFT_DARKGREY);
-  int textWidth = tft.textWidth(label);
-  tft.setCursor(x + (w - textWidth) / 2, y + (h / 2) - 3);
-  tft.print(label);
-}
 
 void drawMorePage() {
   app.currentPage = PAGE_MORE;
   tft.fillScreen(TFT_BLACK);
   drawHeader("MORE");
 
-  drawMenuButton(15, 50, 140, 55, "TIME / WEATHER");
-  drawMenuButton(165, 50, 140, 55, "CALENDAR");
-  drawMenuButton(15, 120, 140, 55, "GAMES");
-  drawMenuButton(165, 120, 140, 55, "PHOTOS");
+  drawMenuButton(15, 44, 140, 44, "TIME / WEATHER");
+  drawMenuButton(165, 44, 140, 44, "CALENDAR");
+  drawMenuButton(15, 96, 140, 44, "GAMES");
+  drawMenuButton(165, 96, 140, 44, "PHOTOS");
+  drawMenuButton(15, 148, 290, 44, "SETTINGS");
 
   drawNavigation();
 }
@@ -40,7 +32,7 @@ void drawGamesPage() {
 }
 
 bool handleMoreTouch(int x, int y) {
-  if (y >= 45 && y <= 110) {
+  if (y >= 40 && y <= 92) {
     if (x < 160) showPage(PAGE_TIME);
     else {
       setCalendarMonth(app.time.currentYear, app.time.currentMonth);
@@ -49,9 +41,14 @@ bool handleMoreTouch(int x, int y) {
     return true;
   }
 
-  if (y >= 115 && y <= 190) {
+  if (y >= 93 && y <= 144) {
     if (x < 160) showPage(PAGE_GAMES);
     else showPage(PAGE_PHOTOS);
+    return true;
+  }
+
+  if (y >= 145 && y <= 200) {
+    openSettings();
     return true;
   }
 

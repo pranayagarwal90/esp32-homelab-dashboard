@@ -7,6 +7,7 @@
 #include "PhotoClient.h"
 #include "PhotoRequestTracker.h"
 #include "Screensaver.h"
+#include "SettingsStore.h"
 #include "UiHelpers.h"
 
 static String photoNames[PHOTO_LIST_MAX];
@@ -17,6 +18,7 @@ static bool photoListLoaded = false;
 static PhotoRequestTracker photoTracker;
 static bool listPrefetchPending = false;
 static int inFlightIndex = 0;      // Photo index of the in-flight Image job.
+static bool inFlightWallpaper = false; // In-flight job is the fixed screensaver wallpaper.
 static bool photoPageShown = false; // The TFT currently shows Photos-page content.
 
 static bool tftOutput(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t *bitmap) {
@@ -74,6 +76,16 @@ static void applyPhotoList(const PhotoList& list) {
 
 static void handlePhotoResult(PhotoResult& result);
 
+// Index of the Settings wallpaper in the photo list, or -1 to rotate.
+static int wallpaperIndex() {
+  const char* wallpaper = settings().wallpaper;
+  if (wallpaper[0] == '\0') return -1;
+  for (int i = 0; i < photoCount; i++) {
+    if (photoNames[i] == wallpaper) return i;
+  }
+  return -1; // Photo no longer on the server: rotate as before.
+}
+
 // Submits the next job if the slot is free: the wanted photo (or the list it
 // needs first), otherwise the boot prefetch. Never blocks.
 static void pumpPhotoRequests() {
@@ -87,7 +99,12 @@ static void pumpPhotoRequests() {
     } else {
       job.type = PhotoJobType::Image;
       inFlightIndex = photoIndex;
-      size_t length = photoNames[photoIndex].length();
+      inFlightWallpaper = false;
+      if (photoTracker.wanted() == PhotoPurpose::Screensaver && wallpaperIndex() >= 0) {
+        inFlightIndex = wallpaperIndex();
+        inFlightWallpaper = true;
+      }
+      size_t length = photoNames[inFlightIndex].length();
       if (length >= sizeof(job.name)) {
         Serial.printf("Photo name too long: %u bytes\n", (unsigned)length);
         PhotoResult failed = {job.generation, job.type, false, nullptr, nullptr, 0};
@@ -95,7 +112,7 @@ static void pumpPhotoRequests() {
         handlePhotoResult(failed);
         return;
       }
-      memcpy(job.name, photoNames[photoIndex].c_str(), length + 1);
+      memcpy(job.name, photoNames[inFlightIndex].c_str(), length + 1);
     }
   } else if (listPrefetchPending && !photoListLoaded) {
     job.generation = PhotoRequestTracker::UNTRACKED;
@@ -141,7 +158,8 @@ static void handlePhotoResult(PhotoResult& result) {
     case PhotoAction::ShowScreensaverPhoto:
       tft.fillScreen(TFT_BLACK);
       TJpgDec.drawJpg(0, 0, result.jpeg, result.jpegLength);
-      photoIndex = (inFlightIndex + 1) % photoCount;
+      // A fixed wallpaper leaves the rotation position alone.
+      if (!inFlightWallpaper) photoIndex = (inFlightIndex + 1) % photoCount;
       onScreensaverPhotoResult(true);
       break;
     case PhotoAction::ScreensaverFallback:
@@ -219,4 +237,16 @@ void handlePhotosTouch(int x, int y) {
       drawPhotosPage();
     }
   }
+}
+
+bool photoListReady() {
+  return photoListLoaded;
+}
+
+int photoListCount() {
+  return photoCount;
+}
+
+const char* photoListName(int index) {
+  return index >= 0 && index < photoCount ? photoNames[index].c_str() : "";
 }

@@ -5,6 +5,7 @@
 #include "PhotoScreen.h"
 #include "Screensaver.h"
 #include "ServicesScreen.h"
+#include "SettingsScreen.h"
 #include "TimeWeatherScreen.h"
 #include "games/ReactionGame.h"
 #include "games/TicTacToe.h"
@@ -22,6 +23,7 @@ void drawCurrentPage() {
     case PAGE_REACTION: drawReactionPage(); break;
     case PAGE_PHOTOS: drawPhotosPage(); break;
     case PAGE_SCREENSAVER: drawScreensaverClock(); break;
+    case PAGE_SETTINGS: drawSettingsPage(); break;
   }
 }
 

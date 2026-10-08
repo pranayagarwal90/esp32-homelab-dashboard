@@ -25,6 +25,20 @@ class BacklightControl {
   static constexpr uint8_t BOOST_DUTY = 153;
   static constexpr uint32_t BOOST_MS = 30000;
 
+  // Duty levels from Settings. Defaults are the original fixed levels.
+  struct Levels {
+    bool automatic = true; // false: fixed manual duty, no night mode or boost.
+    uint8_t manual = DAY_DUTY;
+    uint8_t day = DAY_DUTY;
+    uint8_t night = NIGHT_DUTY;
+    uint8_t boost = BOOST_DUTY;
+  };
+
+  void setLevels(const Levels& value) {
+    levels = value;
+    if (!levels.automatic) boosting = false;
+  }
+
   void setSchedule(const SolarSchedule& value, uint32_t now) {
     schedule = value;
     receivedAt = now;
@@ -39,22 +53,24 @@ class BacklightControl {
   }
 
   void acceptedTouch(uint32_t now) {
-    if (isNight(now)) {
+    if (levels.automatic && isNight(now)) {
       boosting = true;
       lastBoostTouch = now;
     }
   }
 
   uint8_t duty(uint32_t now) {
+    if (!levels.automatic) return levels.manual;
     if (!isNight(now)) {
       boosting = false;
-      return DAY_DUTY;
+      return levels.day;
     }
     if (boosting && uint32_t(now - lastBoostTouch) >= BOOST_MS) boosting = false;
-    return boosting ? BOOST_DUTY : NIGHT_DUTY;
+    return boosting ? levels.boost : levels.night;
   }
 
  private:
+  Levels levels;
   SolarSchedule schedule;
   uint32_t receivedAt = 0;
   uint32_t lastBoostTouch = 0;

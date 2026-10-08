@@ -4,9 +4,8 @@
 #include "Display.h"
 #include "PageRouter.h"
 #include "PhotoScreen.h"
-
-static const unsigned long SCREENSAVER_TIMEOUT = 180000;
-static const unsigned long SCREENSAVER_ROTATE = 30000;
+#include "SettingsScreen.h"
+#include "SettingsStore.h"
 
 static Page pageBeforeScreensaver = PAGE_HOME;
 static unsigned long screensaverLastRotate = 0;
@@ -73,11 +72,14 @@ void exitScreensaver() {
 
 void updateScreensaver() {
   if (app.currentPage != PAGE_SCREENSAVER) {
-    if (millis() - app.lastInteraction >= SCREENSAVER_TIMEOUT) enterScreensaver();
+    // Timeout and enable come from Settings (default 3 min).
+    if (shouldStartScreensaver(settings(), millis() - app.lastInteraction, settingsBlocksScreensaver())) {
+      enterScreensaver();
+    }
     return;
   }
 
-  if (millis() - screensaverLastRotate < SCREENSAVER_ROTATE) return;
+  if (millis() - screensaverLastRotate < screensaverRotateMs(settings())) return;
   // Never start a rotation while the previous photo is still downloading.
   if (isScreensaverPhotoPending()) return;
   screensaverLastRotate = millis();
