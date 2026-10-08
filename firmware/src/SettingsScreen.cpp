@@ -3,6 +3,7 @@
 #include "SettingsScreen.h"
 #include "AppState.h"
 #include "BluetoothControl.h"
+#include "BuildInfo.h"
 #include "Display.h"
 #include "DisplaySettingsScreen.h"
 #include "OtaManager.h"
@@ -15,9 +16,9 @@
 #include "WifiProvisioning.h"
 #include "WifiSettingsScreen.h"
 
-static SettingsView view = SettingsView::Menu;
+static SettingsView view = SettingsView::Root;
 static ConfirmAction pendingConfirm = ConfirmAction::None;
-static SettingsView confirmReturn = SettingsView::Menu;
+static SettingsView confirmReturn = SettingsView::Root;
 
 // --- Shared row widgets -----------------------------------------------------------
 
@@ -83,37 +84,54 @@ void drawInfoLine(int y, const char* label, const char* value) {
   drawInfoValue(y, value);
 }
 
-// --- Menu ---------------------------------------------------------------------------
+// --- List menus (root and categories) -------------------------------------------------
 
-static void drawSettingsMenu() {
-  static const char* labels[4][2] = {
-    {"WI-FI", "DISPLAY"},
-    {"SCREENSAVER", "BLUETOOTH"},
-    {"WALLPAPER", "DEVICE INFO"},
-    {"RESTART", "SLEEP"},
-  };
+static void drawListRow(int row, const char* label) {
+  int y = SETTINGS_LIST_Y0 + row * SETTINGS_LIST_PITCH;
+  tft.fillRoundRect(SETTINGS_LIST_X, y, SETTINGS_LIST_W, SETTINGS_LIST_H, 8, TFT_DARKGREY);
+  tft.drawRoundRect(SETTINGS_LIST_X, y, SETTINGS_LIST_W, SETTINGS_LIST_H, 8, TFT_LIGHTGREY);
+  tft.setTextSize(2);
+  tft.setTextColor(TFT_WHITE, TFT_DARKGREY);
+  tft.setCursor(SETTINGS_LIST_X + 12, y + 11);
+  tft.print(label);
+  tft.setTextColor(TFT_LIGHTGREY, TFT_DARKGREY);
+  tft.setCursor(SETTINGS_LIST_X + SETTINGS_LIST_W - 22, y + 11);
+  tft.print(">");
+}
+
+static void drawSettingsList(const SettingsMenu& menu) {
   tft.fillScreen(TFT_BLACK);
-  drawHeader("SETTINGS");
-  for (int row = 0; row < 4; row++) {
-    for (int col = 0; col < 2; col++) {
-      drawMenuButton(MENU_X[col], MENU_Y0 + row * MENU_PITCH, MENU_W, MENU_H, labels[row][col]);
-    }
-  }
+  drawHeader(menu.title);
+  for (int row = 0; row < menu.count; row++) drawListRow(row, menu.entries[row].label);
   drawBackBar(nullptr, "BACK", nullptr);
 }
 
-static void handleMenuTouch(int x, int y) {
-  switch (settingsMenuItemAt(x, y)) {
-    case SettingsItem::Wifi: showSettingsView(SettingsView::Wifi); break;
-    case SettingsItem::Display: showSettingsView(SettingsView::Display); break;
-    case SettingsItem::Screensaver: showSettingsView(SettingsView::Screensaver); break;
-    case SettingsItem::Bluetooth: showSettingsView(SettingsView::Bluetooth); break;
-    case SettingsItem::Wallpaper: showSettingsView(SettingsView::Wallpaper); break;
-    case SettingsItem::Info: showSettingsView(SettingsView::Info); break;
-    case SettingsItem::Restart: askConfirm(ConfirmAction::Restart, SettingsView::Menu); break;
-    case SettingsItem::Sleep: askConfirm(ConfirmAction::Sleep, SettingsView::Menu); break;
-    default: break;
-  }
+static void handleListTouch(const SettingsMenu& menu, int x, int y) {
+  int row = settingsListRowAt(x, y, menu.count);
+  if (row < 0) return;
+  const SettingsMenuEntry& entry = menu.entries[row];
+  if (entry.confirm != ConfirmAction::None) askConfirm(entry.confirm, view);
+  else showSettingsView(entry.target);
+}
+
+// --- Firmware / build -------------------------------------------------------------------
+
+static void drawBuildInfo() {
+  drawSettingsFrame("FIRMWARE / BUILD");
+  tft.setTextSize(1);
+  tft.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+  tft.setCursor(14, 48);
+  tft.print("Version");
+  tft.setTextSize(2);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  tft.setCursor(110, 44);
+  tft.print(firmwareVersion());
+  int y = 78;
+  drawInfoLine(y, "Build", firmwareBuildTime());
+  drawInfoLine(y += 18, "Git", firmwareGitSha());
+  drawInfoLine(y += 18, "Environment", firmwareBuildEnv());
+  drawInfoLine(y += 18, "Board", firmwareBuildBoard());
+  drawInfoLine(y += 18, "Bluetooth", BLUETOOTH_SUPPORTED ? "Included in this build" : "Not in this build");
 }
 
 // --- Device info --------------------------------------------------------------------
@@ -299,7 +317,7 @@ void askConfirm(ConfirmAction action, SettingsView returnTo) {
 // --- Routing ------------------------------------------------------------------------
 
 void openSettings() {
-  view = SettingsView::Menu;
+  view = SettingsView::Root;
   showPage(PAGE_SETTINGS);
 }
 
@@ -312,7 +330,8 @@ void drawSettingsPage() {
   app.currentPage = PAGE_SETTINGS;
   switch (view) {
     case SettingsView::Confirm: drawConfirm(); break;
-    case SettingsView::Display: drawDisplaySettings(); break;
+    case SettingsView::Brightness: drawDisplaySettings(); break;
+    case SettingsView::Build: drawBuildInfo(); break;
     case SettingsView::Screensaver: drawScreensaverSettings(); break;
     case SettingsView::Info: drawDeviceInfo(); break;
     case SettingsView::Wifi: drawWifiSettings(); break;
@@ -320,14 +339,22 @@ void drawSettingsPage() {
     case SettingsView::Sleeping: drawSleeping(); break;
     case SettingsView::Wallpaper: drawWallpaperSettings(); break;
     case SettingsView::WifiSetup: drawWifiSetup(); break;
-    default: view = SettingsView::Menu; drawSettingsMenu(); break;
+    default: {
+      SettingsMenu menu;
+      if (!settingsMenuFor(view, menu)) {
+        view = SettingsView::Root;
+        settingsMenuFor(view, menu);
+      }
+      drawSettingsList(menu);
+      break;
+    }
   }
 }
 
 static void goBack() {
   flushSettings();
   if (settingsBackLeaves(view)) showPage(PAGE_MORE);
-  else showSettingsView(SettingsView::Menu);
+  else showSettingsView(settingsParent(view));
 }
 
 void handleSettingsTouch(int x, int y) {
@@ -345,12 +372,15 @@ void handleSettingsTouch(int x, int y) {
     return;
   }
   switch (view) {
-    case SettingsView::Menu: handleMenuTouch(x, y); break;
-    case SettingsView::Display: handleDisplaySettingsTouch(x, y); break;
+    case SettingsView::Brightness: handleDisplaySettingsTouch(x, y); break;
     case SettingsView::Screensaver: handleScreensaverSettingsTouch(x, y); break;
     case SettingsView::Wifi: handleWifiSettingsTouch(x, y); break;
     case SettingsView::Bluetooth: handleBluetoothTouch(x, y); break;
-    default: break;
+    default: {
+      SettingsMenu menu;
+      if (settingsMenuFor(view, menu)) handleListTouch(menu, x, y);
+      break;
+    }
   }
 }
 

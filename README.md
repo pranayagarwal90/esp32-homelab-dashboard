@@ -218,8 +218,13 @@ copies `firmware/include/` to the Windows project, never copying or deleting
 
 ## Settings
 
-MORE > SETTINGS has Wi-Fi, Display, Screensaver, Bluetooth, Wallpaper, Device
-Info, Restart and Sleep. Settings are stored in NVS (namespace `settings`) and
+MORE > SETTINGS is a three-level list (BACK always goes one level up):
+
+- **SYSTEM**: Device Info, Firmware / Build, Restart, Sleep
+- **CONNECTIVITY**: Wi-Fi, Bluetooth
+- **DISPLAY**: Brightness, Screensaver, Photos & Wallpaper
+
+Settings Settings are stored in NVS (namespace `settings`) and
 defaults reproduce the previous fixed behaviour (auto brightness 100/15/60%,
 3 min screensaver, 30 s photo/clock rotation, Bluetooth off).
 
@@ -240,3 +245,17 @@ defaults reproduce the previous fixed behaviour (auto brightness 100/15/60%,
   control). RST always wakes it; touch wake (GPIO36) is attempted but not yet
   verified on this board: "Wake: tap screen if supported, or press RST."
 - **Wallpaper** selects the photo the screensaver shows, or rotates all photos.
+
+### Firmware version and build info
+
+The release version lives only in `firmware/include/BuildInfo.h`
+(`DASHBOARD_FIRMWARE_VERSION`, semantic `MAJOR.MINOR.PATCH`, currently
+`1.0.0`); bump it by hand for each release. SYSTEM > Firmware / Build also
+shows the build time (compiler `__DATE__`/`__TIME__`), the short git commit
+(`+dirty` for uncommitted changes), the PlatformIO environment and board.
+`firmware/scripts/build_info.py` (a PlatformIO `extra_scripts` hook) injects
+the commit and environment into `src/BuildInfo.cpp` only and rebuilds that file
+every time so the timestamp is current. Git is optional: outside a checkout the
+commit shows `unknown`, and `DASHBOARD_GIT_SHA` in the environment overrides
+it. `deploy-esp32.sh` syncs `firmware/scripts/` and passes the commit to the
+Windows build, which is not a git checkout.

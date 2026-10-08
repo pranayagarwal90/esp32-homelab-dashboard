@@ -41,7 +41,7 @@ static const BrightnessRow* brightnessRows(int& count) {
 }
 
 void drawDisplaySettings() {
-  drawSettingsFrame("DISPLAY");
+  drawSettingsFrame("BRIGHTNESS");
   drawSettingRow(0, "AUTO (SUNRISE)", nullptr);
   drawSettingToggle(0, settings().autoBrightness);
   int count;

@@ -98,6 +98,12 @@ rsync -r --checksum --delete --exclude='secrets.h' --out-format='  Synced: src/%
 rsync -r --checksum --exclude='secrets.h' --out-format='  Synced: include/%n' \
     "$FIRMWARE_DIR/include/" "$WINDOWS_INCLUDE/"
 
+# scripts/ holds PlatformIO extra_scripts referenced by platformio.ini
+# (build metadata); mirror it so the Windows build can run them.
+mkdir -p "$WINDOWS_PROJECT/scripts"
+rsync -r --checksum --delete --out-format='  Synced: scripts/%n' \
+    "$FIRMWARE_DIR/scripts/" "$WINDOWS_PROJECT/scripts/"
+
 echo
 echo "Source files in Windows project: $(find "$WINDOWS_SRC" -type f | wc -l)"
 echo "NOTE: secrets.h was intentionally NOT copied."
@@ -110,8 +116,16 @@ echo
 echo "[3/3] Starting OTA upload through Windows PlatformIO..."
 echo
 
+# The Windows project is not a git checkout; pass the commit for the
+# Firmware / Build page (scripts/build_info.py falls back to "unknown").
+GIT_SHA="$(git -C "$ROOT_DIR" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+if [ "$GIT_SHA" != "unknown" ] && [ -n "$(git -C "$ROOT_DIR" status --porcelain --untracked-files=no 2>/dev/null)" ]; then
+    GIT_SHA="$GIT_SHA+dirty"
+fi
+echo "  Firmware commit: $GIT_SHA"
+
 powershell.exe -NoProfile -NonInteractive -Command \
-    "Set-Location '$WINDOWS_PROJECT_PS'; & '$WINDOWS_PIO_PS' run -e esp32dev-ota -t upload"
+    "\$env:DASHBOARD_GIT_SHA='$GIT_SHA'; Set-Location '$WINDOWS_PROJECT_PS'; & '$WINDOWS_PIO_PS' run -e esp32dev-ota -t upload"
 
 echo
 echo "========================================"
