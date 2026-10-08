@@ -4,45 +4,112 @@
 
 // Pure Settings navigation, hit-testing and formatting, shared with host tests.
 
+// Settings is one global page (PAGE_SETTINGS); these are its internal views.
+// Root -> category list -> feature page, like a simplified iPhone Settings.
 enum class SettingsView : uint8_t {
-  Menu,
+  Root,
+  System,
+  Connectivity,
+  DisplayMenu,
   Wifi,
   WifiSetup,
-  Display,
+  Brightness,
   Screensaver,
   Bluetooth,
   Wallpaper,
   Info,
+  Build,
   Confirm,
   Sleeping
 };
 
-// Settings menu: 2 columns x 4 rows of 140x36 buttons, BACK bar below.
-enum class SettingsItem : uint8_t {
-  None, Wifi, Display, Screensaver, Bluetooth, Wallpaper, Info, Restart, Sleep
-};
-
-constexpr int MENU_X[2] = {15, 165};
-constexpr int MENU_W = 140;
-constexpr int MENU_Y0 = 44;
-constexpr int MENU_H = 36;
-constexpr int MENU_PITCH = 41;
 constexpr int BACK_BAR_Y = 205; // Same threshold as every other page.
 
-inline SettingsItem settingsMenuItemAt(int x, int y) {
-  static const SettingsItem grid[4][2] = {
-    {SettingsItem::Wifi, SettingsItem::Display},
-    {SettingsItem::Screensaver, SettingsItem::Bluetooth},
-    {SettingsItem::Wallpaper, SettingsItem::Info},
-    {SettingsItem::Restart, SettingsItem::Sleep},
+// --- List menus (root and categories) ------------------------------------------------
+// Full-width rows: x 10..310, 36 px tall, 41 px pitch, up to 4 rows above BACK.
+
+constexpr int SETTINGS_LIST_X = 10;
+constexpr int SETTINGS_LIST_W = 300;
+constexpr int SETTINGS_LIST_Y0 = 44;
+constexpr int SETTINGS_LIST_H = 36;
+constexpr int SETTINGS_LIST_PITCH = 41;
+constexpr int SETTINGS_LIST_MAX_ROWS = 4;
+
+enum class ConfirmAction : uint8_t { None, Restart, Sleep, StartWifiSetup, ForgetWifi, ApplyBluetooth };
+
+struct SettingsMenuEntry {
+  const char* label;
+  SettingsView target;   // Opened when tapped, unless confirm is set.
+  ConfirmAction confirm; // Asks first (restart/sleep), returning to this menu.
+};
+
+struct SettingsMenu {
+  const char* title;
+  const SettingsMenuEntry* entries;
+  int count;
+};
+
+// Fills out the menu for a list view; false for feature pages.
+inline bool settingsMenuFor(SettingsView view, SettingsMenu& out) {
+  static const SettingsMenuEntry root[] = {
+    {"SYSTEM", SettingsView::System, ConfirmAction::None},
+    {"CONNECTIVITY", SettingsView::Connectivity, ConfirmAction::None},
+    {"DISPLAY", SettingsView::DisplayMenu, ConfirmAction::None},
   };
-  if (y < MENU_Y0) return SettingsItem::None;
-  int row = (y - MENU_Y0) / MENU_PITCH;
-  if (row > 3 || (y - MENU_Y0) % MENU_PITCH >= MENU_H) return SettingsItem::None;
-  for (int col = 0; col < 2; col++) {
-    if (x >= MENU_X[col] && x < MENU_X[col] + MENU_W) return grid[row][col];
+  static const SettingsMenuEntry system[] = {
+    {"DEVICE INFO", SettingsView::Info, ConfirmAction::None},
+    {"FIRMWARE / BUILD", SettingsView::Build, ConfirmAction::None},
+    {"RESTART", SettingsView::System, ConfirmAction::Restart},
+    {"SLEEP", SettingsView::System, ConfirmAction::Sleep},
+  };
+  static const SettingsMenuEntry connectivity[] = {
+    {"WI-FI", SettingsView::Wifi, ConfirmAction::None},
+    {"BLUETOOTH", SettingsView::Bluetooth, ConfirmAction::None},
+  };
+  static const SettingsMenuEntry display[] = {
+    {"BRIGHTNESS", SettingsView::Brightness, ConfirmAction::None},
+    {"SCREENSAVER", SettingsView::Screensaver, ConfirmAction::None},
+    {"PHOTOS & WALLPAPER", SettingsView::Wallpaper, ConfirmAction::None},
+  };
+  switch (view) {
+    case SettingsView::Root: out = {"SETTINGS", root, 3}; return true;
+    case SettingsView::System: out = {"SYSTEM", system, 4}; return true;
+    case SettingsView::Connectivity: out = {"CONNECTIVITY", connectivity, 2}; return true;
+    case SettingsView::DisplayMenu: out = {"DISPLAY", display, 3}; return true;
+    default: return false;
   }
-  return SettingsItem::None;
+}
+
+// Row index under (x, y) in a list of count rows, or -1 (gaps are inert).
+inline int settingsListRowAt(int x, int y, int count) {
+  if (x < SETTINGS_LIST_X || x >= SETTINGS_LIST_X + SETTINGS_LIST_W || y < SETTINGS_LIST_Y0) return -1;
+  int row = (y - SETTINGS_LIST_Y0) / SETTINGS_LIST_PITCH;
+  if (row >= count || row >= SETTINGS_LIST_MAX_ROWS || (y - SETTINGS_LIST_Y0) % SETTINGS_LIST_PITCH >= SETTINGS_LIST_H) return -1;
+  return row;
+}
+
+// BACK goes one level up: feature page -> its category -> Settings root ->
+// MORE (settingsBackLeaves).
+inline SettingsView settingsParent(SettingsView view) {
+  switch (view) {
+    case SettingsView::Info:
+    case SettingsView::Build:
+      return SettingsView::System;
+    case SettingsView::Wifi:
+    case SettingsView::WifiSetup:
+    case SettingsView::Bluetooth:
+      return SettingsView::Connectivity;
+    case SettingsView::Brightness:
+    case SettingsView::Screensaver:
+    case SettingsView::Wallpaper:
+      return SettingsView::DisplayMenu;
+    default:
+      return SettingsView::Root;
+  }
+}
+
+inline bool settingsBackLeaves(SettingsView view) {
+  return view == SettingsView::Root;
 }
 
 // Sub-pages: up to 4 rows, 40 px apart, each with buttons on the right.
@@ -69,15 +136,7 @@ inline RowHit settingsRowAt(int x, int y, bool toggleRow) {
   return {row, x < BUTTON_SPLIT ? RowControl::Minus : RowControl::Plus};
 }
 
-// BACK always goes one level up: sub-page -> Settings menu -> MORE page.
-// Returns true when BACK leaves Settings entirely.
-inline bool settingsBackLeaves(SettingsView view) {
-  return view == SettingsView::Menu;
-}
-
 // --- Confirmation dialogs -------------------------------------------------------
-
-enum class ConfirmAction : uint8_t { None, Restart, Sleep, StartWifiSetup, ForgetWifi, ApplyBluetooth };
 
 struct ConfirmText {
   const char* title;

@@ -1,5 +1,7 @@
 #include "DeviceSettings.h"
 #include "SettingsLogic.h"
+#include "BluetoothControl.h"
+#include "BuildInfo.h"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
@@ -110,13 +112,6 @@ static void testScreensaver() {
 }
 
 static void testNavigation() {
-  assert(settingsMenuItemAt(20, 50) == SettingsItem::Wifi);
-  assert(settingsMenuItemAt(300, 50) == SettingsItem::Display);
-  assert(settingsMenuItemAt(20, 44 + 41 * 3 + 10) == SettingsItem::Restart);
-  assert(settingsMenuItemAt(200, 44 + 41 * 3 + 10) == SettingsItem::Sleep);
-  assert(settingsMenuItemAt(160, 50) == SettingsItem::None);       // Gap between columns.
-  assert(settingsMenuItemAt(20, 44 + 38) == SettingsItem::None);   // Gap between rows.
-  assert(settingsMenuItemAt(20, 230) == SettingsItem::None);       // Back bar.
 
   RowHit hit = settingsRowAt(220, 50, true);
   assert(hit.row == 0 && hit.control == RowControl::Toggle);
@@ -127,9 +122,110 @@ static void testNavigation() {
   assert(settingsRowAt(100, 90, false).row == -1); // Label area is inert.
   assert(settingsRowAt(290, 210, false).row == -1); // Back bar.
 
-  assert(settingsBackLeaves(SettingsView::Menu));
-  assert(!settingsBackLeaves(SettingsView::Display));
-  assert(!settingsBackLeaves(SettingsView::Info));
+}
+
+// Taps row `row` of a list view's centre and returns the entry it opens.
+static const SettingsMenuEntry& tapRow(SettingsView view, int row) {
+  SettingsMenu menu;
+  assert(settingsMenuFor(view, menu));
+  int y = SETTINGS_LIST_Y0 + row * SETTINGS_LIST_PITCH + SETTINGS_LIST_H / 2;
+  int hit = settingsListRowAt(160, y, menu.count);
+  assert(hit == row);
+  return menu.entries[hit];
+}
+
+static void testHierarchy() {
+  SettingsMenu menu;
+  // Root: SYSTEM / CONNECTIVITY / DISPLAY.
+  assert(settingsMenuFor(SettingsView::Root, menu) && menu.count == 3);
+  assert(strcmp(menu.title, "SETTINGS") == 0);
+  assert(tapRow(SettingsView::Root, 0).target == SettingsView::System);
+  assert(tapRow(SettingsView::Root, 1).target == SettingsView::Connectivity);
+  assert(tapRow(SettingsView::Root, 2).target == SettingsView::DisplayMenu);
+
+  // List hit-testing: gaps, margins, missing rows and the BACK bar are inert.
+  assert(settingsListRowAt(160, SETTINGS_LIST_Y0 + SETTINGS_LIST_H + 2, 3) == -1); // Gap.
+  assert(settingsListRowAt(5, 60, 3) == -1);                                       // Left margin.
+  assert(settingsListRowAt(315, 60, 3) == -1);                                     // Right margin.
+  assert(settingsListRowAt(160, SETTINGS_LIST_Y0 + 3 * SETTINGS_LIST_PITCH + 10, 3) == -1); // No 4th row.
+  assert(settingsListRowAt(160, 30, 3) == -1);                                     // Header.
+  assert(settingsListRowAt(160, 220, 4) == -1);                                    // BACK bar.
+  assert(SETTINGS_LIST_Y0 + (SETTINGS_LIST_MAX_ROWS - 1) * SETTINGS_LIST_PITCH + SETTINGS_LIST_H < BACK_BAR_Y);
+
+  // SYSTEM: Device Info, Firmware / Build, Restart (confirm), Sleep (confirm).
+  assert(settingsMenuFor(SettingsView::System, menu) && menu.count == 4);
+  assert(tapRow(SettingsView::System, 0).target == SettingsView::Info);
+  assert(tapRow(SettingsView::System, 1).target == SettingsView::Build);
+  assert(tapRow(SettingsView::System, 2).confirm == ConfirmAction::Restart);
+  assert(tapRow(SettingsView::System, 3).confirm == ConfirmAction::Sleep);
+
+  // CONNECTIVITY: Wi-Fi, Bluetooth.
+  assert(settingsMenuFor(SettingsView::Connectivity, menu) && menu.count == 2);
+  assert(tapRow(SettingsView::Connectivity, 0).target == SettingsView::Wifi);
+  assert(tapRow(SettingsView::Connectivity, 1).target == SettingsView::Bluetooth);
+
+  // DISPLAY: Brightness, Screensaver, Photos & Wallpaper.
+  assert(settingsMenuFor(SettingsView::DisplayMenu, menu) && menu.count == 3);
+  assert(tapRow(SettingsView::DisplayMenu, 0).target == SettingsView::Brightness);
+  assert(tapRow(SettingsView::DisplayMenu, 1).target == SettingsView::Screensaver);
+  assert(tapRow(SettingsView::DisplayMenu, 2).target == SettingsView::Wallpaper);
+  assert(strcmp(tapRow(SettingsView::DisplayMenu, 2).label, "PHOTOS & WALLPAPER") == 0);
+
+  // Feature pages are not list menus.
+  assert(!settingsMenuFor(SettingsView::Wifi, menu));
+  assert(!settingsMenuFor(SettingsView::Build, menu));
+
+  // BACK: feature -> category -> root -> MORE.
+  assert(settingsParent(SettingsView::Info) == SettingsView::System);
+  assert(settingsParent(SettingsView::Build) == SettingsView::System);
+  assert(settingsParent(SettingsView::Wifi) == SettingsView::Connectivity);
+  assert(settingsParent(SettingsView::WifiSetup) == SettingsView::Connectivity);
+  assert(settingsParent(SettingsView::Bluetooth) == SettingsView::Connectivity);
+  assert(settingsParent(SettingsView::Brightness) == SettingsView::DisplayMenu);
+  assert(settingsParent(SettingsView::Screensaver) == SettingsView::DisplayMenu);
+  assert(settingsParent(SettingsView::Wallpaper) == SettingsView::DisplayMenu);
+  assert(settingsParent(SettingsView::System) == SettingsView::Root);
+  assert(settingsParent(SettingsView::Connectivity) == SettingsView::Root);
+  assert(settingsParent(SettingsView::DisplayMenu) == SettingsView::Root);
+  assert(settingsBackLeaves(SettingsView::Root));
+  assert(!settingsBackLeaves(SettingsView::System));
+  assert(!settingsBackLeaves(SettingsView::Brightness));
+  SettingsView view = SettingsView::Wallpaper;
+  int levels = 0;
+  while (!settingsBackLeaves(view)) {
+    view = settingsParent(view);
+    levels++;
+  }
+  assert(levels == 2); // Wallpaper -> DISPLAY -> SETTINGS, then MORE.
+
+  // Bluetooth is compiled out by default; the page shows a message instead.
+  assert(!BLUETOOTH_SUPPORTED);
+}
+
+static void testBuildInfo() {
+  // The single version source is semantic MAJOR.MINOR.PATCH.
+  assert(isSemanticVersion(DASHBOARD_FIRMWARE_VERSION));
+  assert(isSemanticVersion("1.0.0") && isSemanticVersion("12.3.45"));
+  assert(!isSemanticVersion("1.0") && !isSemanticVersion("1.0.0.1") && !isSemanticVersion("v1.0.0"));
+  assert(!isSemanticVersion("1..0") && !isSemanticVersion(""));
+
+  char out[32];
+  formatBuildTimestamp("Oct  8 2026", "15:10:42", out, sizeof(out));
+  assert(strcmp(out, "2026-10-08 15:10") == 0);
+  formatBuildTimestamp("Jan 31 2027", "00:05:00", out, sizeof(out));
+  assert(strcmp(out, "2027-01-31 00:05") == 0);
+  formatBuildTimestamp("Foo  8 2026", "15:10:42", out, sizeof(out)); // Unknown month.
+  assert(strcmp(out, "Foo  8 2026 15:10:42") == 0);
+  formatBuildTimestamp("Oct  8 2026", "bad", out, sizeof(out));
+  assert(strcmp(out, "Oct  8 2026 bad") == 0);
+  // The real compiler macros always parse.
+  formatBuildTimestamp(__DATE__, __TIME__, out, sizeof(out));
+  assert(strlen(out) == 16 && out[4] == '-' && out[10] == ' ');
+
+  // Missing injected metadata falls back to "unknown".
+  assert(strcmp(buildValueOr(""), "unknown") == 0);
+  assert(strcmp(buildValueOr(nullptr), "unknown") == 0);
+  assert(strcmp(buildValueOr("a1b2c3d"), "a1b2c3d") == 0);
 }
 
 static void testConfirm() {
@@ -206,9 +302,11 @@ int main() {
   testSteps();
   testScreensaver();
   testNavigation();
+  testHierarchy();
+  testBuildInfo();
   testConfirm();
   testFormatting();
   testWifiSelection();
   testSleepRelease();
-  puts("Settings tests passed: defaults, codec, corrupt fallback, steps, navigation, confirm, formatting, wifi, sleep");
+  puts("Settings tests passed: defaults, codec, corrupt fallback, steps, navigation, confirm, formatting, wifi, sleep, hierarchy, build info");
 }
