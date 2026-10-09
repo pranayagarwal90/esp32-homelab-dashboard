@@ -1,37 +1,10 @@
 #pragma once
 #include <Arduino.h>
+#include "Pages.h"
 #include "WeatherLogic.h"
 
 // Application state shared between screens. Main task only: the status worker
 // fills a private snapshot that StatusClient copies in here.
-
-enum Page {
-  PAGE_HOME,
-  PAGE_DOCKER,
-  PAGE_SERVICES,
-  PAGE_MORE,
-  PAGE_TIME,
-  PAGE_CALENDAR,
-  PAGE_GAMES,
-  PAGE_TTT,
-  PAGE_REACTION,
-  PAGE_PHOTOS,
-  PAGE_SCREENSAVER,
-  PAGE_SETTINGS,
-  PAGE_ALERTS,
-  PAGE_TOOLS,
-  PAGE_STOPWATCH,
-  PAGE_SNAKE,
-  PAGE_MEMORY,
-  PAGE_SIMON,
-  PAGE_WEATHER
-};
-
-// Games in play own the screen: no status fetches and no status redraws.
-inline bool isGamePlayPage(Page page) {
-  return page == PAGE_TTT || page == PAGE_REACTION || page == PAGE_SNAKE ||
-         page == PAGE_MEMORY || page == PAGE_SIMON;
-}
 
 constexpr int MAX_DISKS = 4;
 constexpr int MAX_CONTAINERS = 7;
@@ -78,6 +51,9 @@ struct ServiceState {
   // Monitored health keys actually present in the response (AlertService
   // bits); a missing key is unknown, not offline.
   uint8_t alertReported = 0;
+  // SERVICES list (ServiceId bits): key present as a bool / reported healthy.
+  uint8_t reported = 0;
+  uint8_t online = 0;
 };
 
 struct TimeData {

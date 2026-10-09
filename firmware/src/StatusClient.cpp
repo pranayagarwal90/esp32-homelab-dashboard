@@ -8,6 +8,7 @@
 #include "StatusClient.h"
 #include "AlertLogic.h"
 #include "AlertManager.h"
+#include "ServicesLogic.h"
 #include "ApiConfig.h"
 #include "AppState.h"
 #include "BacklightPwm.h"
@@ -15,6 +16,7 @@
 #include "NetworkManager.h"
 #include "PageRouter.h"
 #include "WeatherScreen.h"
+#include "HomeScreen.h"
 
 static const unsigned long REFRESH_INTERVAL = 10000;
 static unsigned long lastRefresh = 0; // Main task only.
@@ -207,6 +209,13 @@ static StatusOutcome readStatus(const StatusRequest& request, StatusSnapshot& sn
     {"jellyfin", ALERT_JELLYFIN}, {"navidrome", ALERT_NAVIDROME}, {"metube", ALERT_METUBE},
     {"ollama", ALERT_OLLAMA}, {"cloudflare", ALERT_CLOUDFLARE},
   };
+  services.reported = services.online = 0;
+  for (int id = 0; id < SVC_COUNT; id++) {
+    JsonVariantConst value = doc["services"][SERVICE_LIST[id].key];
+    if (!value.is<bool>()) continue;
+    services.reported |= 1u << id;
+    if (value.as<bool>()) services.online |= 1u << id;
+  }
   services.alertReported = 0;
   for (const auto& monitored : MONITORED) {
     if (doc["services"][monitored.key].is<bool>()) services.alertReported |= 1u << monitored.service;
@@ -318,6 +327,13 @@ void processStatusResult() {
       refreshWeatherPage();
       redraw = false;
     }
+    // HOME redraws only the areas that changed.
+    if (app.currentPage == PAGE_HOME) {
+      refreshHomePage();
+      redraw = false;
+    }
+    // MORE and SETTINGS show no status data apart from LIVE / OFFLINE.
+    if ((app.currentPage == PAGE_MORE || app.currentPage == PAGE_SETTINGS) && wasOnline) redraw = false;
     // The stopwatch refreshes itself and shows no status.
     if (redraw && !isGamePlayPage(app.currentPage) && app.currentPage != PAGE_GAMES &&
         app.currentPage != PAGE_PHOTOS && app.currentPage != PAGE_SCREENSAVER &&
@@ -333,9 +349,8 @@ void processStatusResult() {
         redrawn = true;
       }
     }
-    if (alertsChanged && !redrawn && (app.currentPage == PAGE_HOME || app.currentPage == PAGE_ALERTS)) {
-      drawCurrentPage();
-    }
+    if (alertsChanged && !redrawn && app.currentPage == PAGE_HOME) refreshHomePage();
+    if (alertsChanged && !redrawn && app.currentPage == PAGE_ALERTS) drawCurrentPage();
   }
   // The slot is released only after every String has been copied and drawing is done.
   lastRefresh = millis();

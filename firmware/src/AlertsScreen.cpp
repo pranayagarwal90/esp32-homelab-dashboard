@@ -116,7 +116,7 @@ void handleAlertsTouch(int x, int y) {
       }
       break;
     case AlertsBarHit::Back:
-      showPage(alertsReturn);
+      showPage(appBackTarget(PAGE_ALERTS, alertsReturn));
       break;
     case AlertsBarHit::None:
       break;

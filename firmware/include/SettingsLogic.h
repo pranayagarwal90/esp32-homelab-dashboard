@@ -1,11 +1,13 @@
 #pragma once
 #include <stdint.h>
 #include <stdio.h>
+#include "UiIcons.h"
+#include "UiTheme.h"
 
 // Pure Settings navigation, hit-testing and formatting, shared with host tests.
 
-// Settings is one global page (PAGE_SETTINGS); these are its internal views.
-// Root -> category list -> feature page, like a simplified iPhone Settings.
+// Settings is one global page (PAGE_SETTINGS, a root tab); these are its
+// internal views. Root -> category list -> feature page, like iPhone Settings.
 enum class SettingsView : uint8_t {
   Root,
   System,
@@ -20,7 +22,9 @@ enum class SettingsView : uint8_t {
   Info,
   Build,
   Confirm,
-  Sleeping
+  Sleeping,
+  Utilities,
+  Stopwatch   // Not drawn here: opens PAGE_STOPWATCH; BACK returns to Utilities.
 };
 
 constexpr int BACK_BAR_Y = 205; // Same threshold as every other page.
@@ -41,6 +45,8 @@ struct SettingsMenuEntry {
   const char* label;
   SettingsView target;   // Opened when tapped, unless confirm is set.
   ConfirmAction confirm; // Asks first (restart/sleep), returning to this menu.
+  UiIcon icon;
+  uint16_t tile;         // Icon tile colour.
 };
 
 struct SettingsMenu {
@@ -51,31 +57,37 @@ struct SettingsMenu {
 
 // Fills out the menu for a list view; false for feature pages.
 inline bool settingsMenuFor(SettingsView view, SettingsMenu& out) {
+  typedef ConfirmAction A;
   static const SettingsMenuEntry root[] = {
-    {"SYSTEM", SettingsView::System, ConfirmAction::None},
-    {"CONNECTIVITY", SettingsView::Connectivity, ConfirmAction::None},
-    {"DISPLAY", SettingsView::DisplayMenu, ConfirmAction::None},
+    {"SYSTEM", SettingsView::System, A::None, UiIcon::System, UiColor::Grey},
+    {"CONNECTIVITY", SettingsView::Connectivity, A::None, UiIcon::Connectivity, UiColor::Blue},
+    {"DISPLAY", SettingsView::DisplayMenu, A::None, UiIcon::Display, UiColor::Yellow},
+    {"UTILITIES", SettingsView::Utilities, A::None, UiIcon::Utilities, UiColor::Orange},
   };
   static const SettingsMenuEntry system[] = {
-    {"DEVICE INFO", SettingsView::Info, ConfirmAction::None},
-    {"FIRMWARE / BUILD", SettingsView::Build, ConfirmAction::None},
-    {"RESTART", SettingsView::System, ConfirmAction::Restart},
-    {"SLEEP", SettingsView::System, ConfirmAction::Sleep},
+    {"DEVICE INFO", SettingsView::Info, A::None, UiIcon::DeviceInfo, UiColor::Grey},
+    {"FIRMWARE / BUILD", SettingsView::Build, A::None, UiIcon::Firmware, UiColor::Grey},
+    {"RESTART", SettingsView::System, A::Restart, UiIcon::Restart, UiColor::Orange},
+    {"SLEEP", SettingsView::System, A::Sleep, UiIcon::Sleep, UiColor::Purple},
   };
   static const SettingsMenuEntry connectivity[] = {
-    {"WI-FI", SettingsView::Wifi, ConfirmAction::None},
-    {"BLUETOOTH", SettingsView::Bluetooth, ConfirmAction::None},
+    {"WI-FI", SettingsView::Wifi, A::None, UiIcon::Wifi, UiColor::Blue},
+    {"BLUETOOTH", SettingsView::Bluetooth, A::None, UiIcon::Bluetooth, UiColor::Blue},
   };
   static const SettingsMenuEntry display[] = {
-    {"BRIGHTNESS", SettingsView::Brightness, ConfirmAction::None},
-    {"SCREENSAVER", SettingsView::Screensaver, ConfirmAction::None},
-    {"PHOTOS & WALLPAPER", SettingsView::Wallpaper, ConfirmAction::None},
+    {"BRIGHTNESS", SettingsView::Brightness, A::None, UiIcon::Brightness, UiColor::Yellow},
+    {"SCREENSAVER", SettingsView::Screensaver, A::None, UiIcon::Screensaver, UiColor::Teal},
+    {"PHOTOS & WALLPAPER", SettingsView::Wallpaper, A::None, UiIcon::Photos, UiColor::Purple},
+  };
+  static const SettingsMenuEntry utilities[] = {
+    {"STOPWATCH", SettingsView::Stopwatch, A::None, UiIcon::Stopwatch, UiColor::Orange},
   };
   switch (view) {
-    case SettingsView::Root: out = {"SETTINGS", root, 3}; return true;
+    case SettingsView::Root: out = {"SETTINGS", root, 4}; return true;
     case SettingsView::System: out = {"SYSTEM", system, 4}; return true;
     case SettingsView::Connectivity: out = {"CONNECTIVITY", connectivity, 2}; return true;
     case SettingsView::DisplayMenu: out = {"DISPLAY", display, 3}; return true;
+    case SettingsView::Utilities: out = {"UTILITIES", utilities, 1}; return true;
     default: return false;
   }
 }
@@ -88,8 +100,9 @@ inline int settingsListRowAt(int x, int y, int count) {
   return row;
 }
 
-// BACK goes one level up: feature page -> its category -> Settings root ->
-// MORE (settingsBackLeaves).
+// BACK goes one level up: feature page -> its category -> Settings root. The
+// root has no BACK: SETTINGS is a root tab and its bottom bar is the
+// navigation (settingsBottomIsNav).
 inline SettingsView settingsParent(SettingsView view) {
   switch (view) {
     case SettingsView::Info:
@@ -103,12 +116,14 @@ inline SettingsView settingsParent(SettingsView view) {
     case SettingsView::Screensaver:
     case SettingsView::Wallpaper:
       return SettingsView::DisplayMenu;
+    case SettingsView::Stopwatch:
+      return SettingsView::Utilities;
     default:
       return SettingsView::Root;
   }
 }
 
-inline bool settingsBackLeaves(SettingsView view) {
+inline bool settingsBottomIsNav(SettingsView view) {
   return view == SettingsView::Root;
 }
 

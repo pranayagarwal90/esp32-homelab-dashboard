@@ -2,15 +2,17 @@
 #include <SPI.h>
 #include <XPT2046_Touchscreen.h>
 #include "TouchHandler.h"
-#include "AlertLogic.h"
 #include "AlertsScreen.h"
 #include "AppState.h"
 #include "BacklightPwm.h"
 #include "CalendarScreen.h"
+#include "HomeScreen.h"
+#include "HomeServerStatusScreen.h"
 #include "MenuScreens.h"
 #include "PageRouter.h"
 #include "PhotoScreen.h"
 #include "Screensaver.h"
+#include "ServicesScreen.h"
 #include "SettingsScreen.h"
 #include "StopwatchScreen.h"
 #include "TimeWeatherScreen.h"
@@ -93,10 +95,6 @@ void handleTouch() {
     handleSettingsTouch(x, y);
     return;
   }
-  if (app.currentPage == PAGE_TOOLS) {
-    handleToolsMenuTouch(x, y);
-    return;
-  }
   if (app.currentPage == PAGE_SIMON) {
     handleSimonTouch(x, y);
     return;
@@ -117,18 +115,21 @@ void handleTouch() {
     handleAlertsTouch(x, y);
     return;
   }
-  if (app.currentPage == PAGE_HOME && alertBadgeHit(x, y)) {
-    openAlerts(PAGE_HOME);
+  if (app.currentPage == PAGE_HOMESERVER) {
+    handleHomeServerTouch(x, y);
     return;
   }
+  if (app.currentPage == PAGE_SERVICES) {
+    handleServicesTouch(x, y);
+    return;
+  }
+  if (app.currentPage == PAGE_HOME && handleHomeTouch(x, y)) return;
   // MORE menu touches outside its buttons fall through to the nav bar.
   if (app.currentPage == PAGE_MORE && handleMoreTouch(x, y)) return;
 
-  if (y >= 205) {
-    if (x < 107) showPage(PAGE_HOME);
-    else if (x < 214) showPage(PAGE_SERVICES);
-    else showPage(PAGE_MORE);
-  }
+  // Root pages (HOME, MORE): the bottom navigation.
+  NavTab tab;
+  if (rootNavAt(x, y, tab)) showRootTab(tab);
 }
 
 bool touchPressed() {

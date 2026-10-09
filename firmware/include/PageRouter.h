@@ -5,3 +5,5 @@
 // navigate through showPage() instead of including each other.
 void drawCurrentPage();
 void showPage(Page page);
+// Bottom navigation: HOME, MORE, or the Settings root.
+void showRootTab(NavTab tab);

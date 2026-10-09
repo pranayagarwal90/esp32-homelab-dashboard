@@ -2,7 +2,7 @@
 #include "StopwatchScreen.h"
 #include "AppState.h"
 #include "Display.h"
-#include "MenuScreens.h"
+#include "SettingsScreen.h"
 #include "PageRouter.h"
 #include "Stopwatch.h"
 #include "UiHelpers.h"
@@ -68,7 +68,7 @@ void handleStopwatchTouch(int x, int y) {
   uint32_t now = millis();
   switch (stopwatchHitAt(x, y)) {
     case StopwatchHit::Back:
-      showMenuNode(menuParent(MenuNode::Stopwatch));
+      openSettingsAt(settingsParent(SettingsView::Stopwatch)); // UTILITIES.
       return;
     case StopwatchHit::Reset:
       stopwatch.reset();

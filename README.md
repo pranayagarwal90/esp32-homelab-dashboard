@@ -186,12 +186,17 @@ g++ -std=c++11 -Wall -Wextra -Werror -Ifirmware/include firmware/test/test_games
 /tmp/test-ota-animation
 /tmp/test-system-animation
 /tmp/test-weather
+/tmp/test-navigation
 g++ -std=c++11 -Wall -Wextra -Werror -Ifirmware/include firmware/test/test_ota_animation.cpp -o /tmp/test-ota-animation
 /tmp/test-system-animation
 /tmp/test-weather
+/tmp/test-navigation
 g++ -std=c++11 -Wall -Wextra -Werror -Ifirmware/include firmware/test/test_system_animation.cpp -o /tmp/test-system-animation
 /tmp/test-weather
+/tmp/test-navigation
 g++ -std=c++11 -Wall -Wextra -Werror -Ifirmware/include firmware/test/test_weather_logic.cpp -o /tmp/test-weather
+/tmp/test-navigation
+g++ -std=c++11 -Wall -Wextra -Werror -Ifirmware/include firmware/test/test_navigation.cpp -o /tmp/test-navigation
 /tmp/test-settings
 /tmp/test-alerts
 /tmp/test-stopwatch
@@ -199,6 +204,7 @@ g++ -std=c++11 -Wall -Wextra -Werror -Ifirmware/include firmware/test/test_weath
 /tmp/test-ota-animation
 /tmp/test-system-animation
 /tmp/test-weather
+/tmp/test-navigation
 /tmp/test-photo-requests
 /tmp/test-backlight
 pio run -d firmware -e esp32dev
@@ -212,23 +218,25 @@ subsystem has a header in `firmware/include/` and a source in `firmware/src/`:
 
 | Module | Responsibility |
 |---|---|
-| `AppState` | Page enum and the main-task copy of status data (`app`) |
+| `AppState`, `Pages.h` | Main-task copy of status data (`app`); pure page enum, root tabs and BACK targets |
 | `PageRouter` | `drawCurrentPage()` / `showPage()`; the only file that knows every screen |
-| `UiHelpers`, `Display` | Shared header/nav/back bars; the `tft` instance |
-| `HomeScreen`, `ServicesScreen`, `MenuScreens`, `TimeWeatherScreen`, `CalendarScreen`, `PhotoScreen`, `Screensaver` | One screen each: drawing and its touch zones |
+| `UiHelpers`, `Display` | Shared header, icon bottom navigation and back bars; the `tft` instance |
+| `UiIcons`, `UiIconShapes.h`, `UiTheme.h` | Vector icons from TFT primitives (24x24 shape tables, host-tested) and the accent palette |
+| `HomeScreen`, `HomeServerStatusScreen`, `ServicesScreen`, `MenuScreens`, `TimeWeatherScreen`, `CalendarScreen`, `PhotoScreen`, `Screensaver` | One screen each: drawing and its touch zones |
+| `HomeLogic.h`, `ServicesLogic.h` | Pure, host-tested HOME health/summary formatting and SERVICES rows |
 | `games/TicTacToe`, `games/ReactionGame`, `games/SnakeGame`, `games/MemoryGame`, `games/SimonGame` | Game state, drawing, touch, timing |
 | `games/SnakeLogic.h`, `games/MemoryLogic.h`, `games/SimonLogic.h`, `games/GameRandom.h` | Pure, host-tested game rules and millis()-driven state machines |
-| `StopwatchScreen`, `Stopwatch.h` | MORE > TOOLS > STOPWATCH page and its pure, host-tested timing |
-| `MenuLayout.h` | Pure MORE / GAMES / TOOLS layout, hit-testing and BACK targets |
+| `StopwatchScreen`, `Stopwatch.h` | SETTINGS > UTILITIES > STOPWATCH page and its pure, host-tested timing |
+| `MenuLayout.h` | Pure, data-driven MORE launcher and GAMES menu layout and hit-testing |
 | `TouchHandler` | XPT2046 read, calibration, debounce, wake, backlight boost, dispatch |
 | `StatusClient` | FreeRTOS `/api/status` worker, snapshot hand-off, refresh timing |
 | `PhotoClient` | FreeRTOS worker for `/api/photos` and JPEG downloads; hands the JPEG buffer to the main task |
-| `SettingsScreen`, `DisplaySettingsScreen`, `WifiSettingsScreen` | MORE > SETTINGS menu and its sub-pages |
+| `SettingsScreen`, `DisplaySettingsScreen`, `WifiSettingsScreen` | SETTINGS tab and its sub-pages |
 | `DeviceSettings.h`, `SettingsLogic.h` | Pure, host-tested settings model, NVS encoding, navigation and formatting |
 | `SettingsStore` | NVS persistence (debounced, change-only writes) and the saved Wi-Fi network |
 | `WifiProvisioning` | Temporary setup hotspot and web form, served from its own task |
 | `PowerManager`, `BluetoothControl` | Restart, deep sleep, boot-time Bluetooth controller |
-| `AlertLogic.h`, `AlertManager`, `AlertsScreen` | Pure, host-tested alert rules; evaluation on each status result; MORE > ALERTS page and the HOME indicator |
+| `AlertLogic.h`, `AlertManager`, `AlertsScreen` | Pure, host-tested alert rules; evaluation on each status result; MORE > ALERTS page and the HOMESERVER indicator |
 | `PhotoRequestTracker.h` | Pure, host-tested request generations: stale or cancelled photo results are discarded |
 | `NetworkManager`, `OtaManager`, `BacklightPwm` | Wi-Fi connect/reconnect, ArduinoOTA, LEDC driver |
 | `OtaAnimation`, `OtaAnimationLogic.h` | Walking-man OTA progress screen; pure, host-tested progress mapping and timing |
@@ -257,18 +265,36 @@ only: they clear by themselves, with no acknowledgement or history.
 When `/api/status` reports `host_available: false` (cached or zero host
 metrics) RAM and disk alerts keep their previous state. A disk missing from a
 valid report clears its alert. Time on the Games and Photos pages, which skip
-status refreshes, never counts toward staleness. HOME shows `ALL GOOD`,
-`2 WARNINGS` or `1 CRITICAL +2` on the RAM line; tap it, or MORE > ALERTS, to
-see the list (three per page, PREV / NEXT). Thresholds live in
+status refreshes, never counts toward staleness. HOME turns the counts into
+HEALTHY / ATTENTION / CRITICAL / NO DATA; HOMESERVER shows `ALL GOOD`,
+`2 WARNINGS` or `1 CRITICAL +2` on its RAM line. Tap either, or MORE > ALERTS,
+to see the list (three per page, PREV / NEXT); BACK returns where you came from. Thresholds live in
 `firmware/include/AlertLogic.h`.
+
+## Navigation
+
+The bottom bar has three tabs with icons, HOME | MORE | SETTINGS (the active
+one highlighted; apps count as MORE, the Settings hierarchy and Stopwatch as
+SETTINGS). Tabs appear on the three root pages; every page below them has a
+BACK bar.
+
+- **HOME**: date, time, current weather (tap: WEATHER), homelab health from
+  Alerts (tap: ALERTS) and CPU / RAM (tap: HOMESERVER). Only areas whose data
+  changed are redrawn.
+- **MORE**: an app launcher of icon tiles (`MORE_APPS` in `MenuLayout.h`;
+  a ninth app adds a page): HomeServer (the detailed metrics page that used to
+  be HOME), Services, Weather, Calendar, Photos, Alerts, Games and Clocks
+  (the former TIME / WEATHER page with local time and world clocks).
+- **SETTINGS**: SYSTEM, CONNECTIVITY, DISPLAY, UTILITIES (Stopwatch). The root
+  has no BACK; categories return to it.
+- **SERVICES**: one row per health check with a green (online), red
+  (offline) or grey (not reported) dot.
 
 ## Tools and games
 
-MORE has four rows: TIME / WEATHER, CALENDAR, GAMES, PHOTOS, ALERTS,
-SETTINGS and a full-width TOOLS. BACK goes tool > TOOLS > MORE and
-game > GAMES > MORE.
+BACK goes game > GAMES > MORE.
 
-- **TOOLS > STOPWATCH**: start / pause / resume, reset and up to 10 laps
+- **SETTINGS > UTILITIES > STOPWATCH**: start / pause / resume, reset and up to 10 laps
   (further laps are refused). It keeps running on other pages and under the
   screensaver; only RESET stops and clears it. The digits refresh every
   100 ms without redrawing the page.
@@ -298,8 +324,9 @@ normal touch boost brightens the screen; no setting is changed.
 
 ## Weather
 
-MORE > TIME / WEATHER is unchanged apart from a `FORECAST >` hint: tapping
-the weather block opens WEATHER (BACK returns). It shows the current
+WEATHER opens from MORE, from HOME's weather summary, or from the Clocks
+page's weather block (`FORECAST >`); BACK returns to where it was opened. It
+shows the current
 temperature, condition and feels-like next to an animated scene; high, low,
 rain chance (this hour and today's maximum), humidity, wind and the next
 sunrise or sunset; and the next six hours (time, temperature, rain %). Units
@@ -346,11 +373,13 @@ sleeps. Runtime reconnects still show OFFLINE in the header.
 
 ## Settings
 
-MORE > SETTINGS is a three-level list (BACK always goes one level up):
+The SETTINGS tab is a three-level list with an icon per row (BACK goes one
+level up; the root's bottom bar is the navigation):
 
 - **SYSTEM**: Device Info, Firmware / Build, Restart, Sleep
 - **CONNECTIVITY**: Wi-Fi, Bluetooth
 - **DISPLAY**: Brightness, Screensaver, Photos & Wallpaper
+- **UTILITIES**: Stopwatch
 
 Settings Settings are stored in NVS (namespace `settings`) and
 defaults reproduce the previous fixed behaviour (auto brightness 100/15/60%,
