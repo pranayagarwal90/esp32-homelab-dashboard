@@ -181,8 +181,12 @@ g++ -std=c++11 -Wall -Wextra -Werror -Ifirmware/include firmware/test/test_backl
 g++ -std=c++11 -Wall -Wextra -Werror -Ifirmware/include firmware/test/test_photo_requests.cpp -o /tmp/test-photo-requests
 g++ -std=c++11 -Wall -Wextra -Werror -Ifirmware/include firmware/test/test_settings.cpp -o /tmp/test-settings
 g++ -std=c++11 -Wall -Wextra -Werror -Ifirmware/include firmware/test/test_alerts.cpp -o /tmp/test-alerts
+g++ -std=c++11 -Wall -Wextra -Werror -Ifirmware/include firmware/test/test_stopwatch.cpp -o /tmp/test-stopwatch
+g++ -std=c++11 -Wall -Wextra -Werror -Ifirmware/include firmware/test/test_games.cpp -o /tmp/test-games
 /tmp/test-settings
 /tmp/test-alerts
+/tmp/test-stopwatch
+/tmp/test-games
 /tmp/test-photo-requests
 /tmp/test-backlight
 pio run -d firmware -e esp32dev
@@ -200,7 +204,10 @@ subsystem has a header in `firmware/include/` and a source in `firmware/src/`:
 | `PageRouter` | `drawCurrentPage()` / `showPage()`; the only file that knows every screen |
 | `UiHelpers`, `Display` | Shared header/nav/back bars; the `tft` instance |
 | `HomeScreen`, `ServicesScreen`, `MenuScreens`, `TimeWeatherScreen`, `CalendarScreen`, `PhotoScreen`, `Screensaver` | One screen each: drawing and its touch zones |
-| `games/TicTacToe`, `games/ReactionGame` | Game state, drawing, touch, timing |
+| `games/TicTacToe`, `games/ReactionGame`, `games/SnakeGame`, `games/MemoryGame`, `games/SimonGame` | Game state, drawing, touch, timing |
+| `games/SnakeLogic.h`, `games/MemoryLogic.h`, `games/SimonLogic.h`, `games/GameRandom.h` | Pure, host-tested game rules and millis()-driven state machines |
+| `StopwatchScreen`, `Stopwatch.h` | MORE > TOOLS > STOPWATCH page and its pure, host-tested timing |
+| `MenuLayout.h` | Pure MORE / GAMES / TOOLS layout, hit-testing and BACK targets |
 | `TouchHandler` | XPT2046 read, calibration, debounce, wake, backlight boost, dispatch |
 | `StatusClient` | FreeRTOS `/api/status` worker, snapshot hand-off, refresh timing |
 | `PhotoClient` | FreeRTOS worker for `/api/photos` and JPEG downloads; hands the JPEG buffer to the main task |
@@ -238,6 +245,28 @@ status refreshes, never counts toward staleness. HOME shows `ALL GOOD`,
 `2 WARNINGS` or `1 CRITICAL +2` on the RAM line; tap it, or MORE > ALERTS, to
 see the list (three per page, PREV / NEXT). Thresholds live in
 `firmware/include/AlertLogic.h`.
+
+## Tools and games
+
+MORE has four rows: TIME / WEATHER, CALENDAR, GAMES, PHOTOS, ALERTS,
+SETTINGS and a full-width TOOLS. BACK goes tool > TOOLS > MORE and
+game > GAMES > MORE.
+
+- **TOOLS > STOPWATCH**: start / pause / resume, reset and up to 10 laps
+  (further laps are refused). It keeps running on other pages and under the
+  screensaver; only RESET stops and clears it. The digits refresh every
+  100 ms without redrawing the page.
+- **GAMES**: Tic-Tac-Toe, Reaction Tap, Snake, Memory Match and Simon Says.
+  Snake uses an on-screen direction pad (tap the board to pause), Memory Match
+  is a 4x4 grid of numbered pairs, and Simon Says has four large pads.
+
+Everything is local and timed with millis() state machines (no delay(), no
+extra tasks). Games pause when their page is left, including for the
+screensaver: Snake resumes on an arrow tap, Memory Match turns a pending
+mismatched pair back over, and Simon replays an interrupted round from its
+first step. Game state stays until RESTART. As before, game pages skip status
+fetches (that time does not count toward the stale-data alert); the stopwatch
+keeps normal fetching but is never repainted by status updates.
 
 ## Settings
 

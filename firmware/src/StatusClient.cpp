@@ -278,15 +278,17 @@ void processStatusResult() {
     bool alertsChanged = alertsOnStatus();
     // ALERTS redraws only when something it shows changed.
     bool redraw = app.currentPage != PAGE_ALERTS || alertsChanged || !wasOnline;
-    if (redraw && app.currentPage != PAGE_TTT && app.currentPage != PAGE_REACTION && app.currentPage != PAGE_GAMES &&
-        app.currentPage != PAGE_PHOTOS && app.currentPage != PAGE_SCREENSAVER) drawCurrentPage();
+    // The stopwatch refreshes itself and shows no status.
+    if (redraw && !isGamePlayPage(app.currentPage) && app.currentPage != PAGE_GAMES &&
+        app.currentPage != PAGE_PHOTOS && app.currentPage != PAGE_SCREENSAVER &&
+        app.currentPage != PAGE_STOPWATCH) drawCurrentPage();
   } else {
     bool alertsChanged = alertsOnFetchFailed();
     bool redrawn = false;
     if (result.outcome == StatusOutcome::ReconnectFailed || result.outcome == StatusOutcome::HttpFailed) {
       app.serverOnline = false;
       if (result.outcome == StatusOutcome::ReconnectFailed && app.currentPage != PAGE_SCREENSAVER &&
-          app.currentPage != PAGE_TTT && app.currentPage != PAGE_REACTION) {
+          !isGamePlayPage(app.currentPage) && app.currentPage != PAGE_STOPWATCH) {
         drawCurrentPage();
         redrawn = true;
       }

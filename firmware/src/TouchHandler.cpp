@@ -12,8 +12,12 @@
 #include "PhotoScreen.h"
 #include "Screensaver.h"
 #include "SettingsScreen.h"
+#include "StopwatchScreen.h"
 #include "TimeWeatherScreen.h"
+#include "games/MemoryGame.h"
 #include "games/ReactionGame.h"
+#include "games/SimonGame.h"
+#include "games/SnakeGame.h"
 #include "games/TicTacToe.h"
 
 #define TOUCH_CLK 25
@@ -82,6 +86,26 @@ void handleTouch() {
   }
   if (app.currentPage == PAGE_SETTINGS) {
     handleSettingsTouch(x, y);
+    return;
+  }
+  if (app.currentPage == PAGE_TOOLS) {
+    handleToolsMenuTouch(x, y);
+    return;
+  }
+  if (app.currentPage == PAGE_SIMON) {
+    handleSimonTouch(x, y);
+    return;
+  }
+  if (app.currentPage == PAGE_MEMORY) {
+    handleMemoryTouch(x, y);
+    return;
+  }
+  if (app.currentPage == PAGE_SNAKE) {
+    handleSnakeTouch(x, y);
+    return;
+  }
+  if (app.currentPage == PAGE_STOPWATCH) {
+    handleStopwatchTouch(x, y);
     return;
   }
   if (app.currentPage == PAGE_ALERTS) {

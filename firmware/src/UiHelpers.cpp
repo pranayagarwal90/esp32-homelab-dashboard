@@ -20,6 +20,23 @@ void drawHeader(const char* title) {
   }
 }
 
+void drawTitleBar(const char* title, const char* right) {
+  tft.fillRect(0, 0, 320, 36, TFT_DARKGREY);
+  tft.setTextSize(2);
+  tft.setTextColor(TFT_WHITE, TFT_DARKGREY);
+  tft.setCursor(10, 10);
+  tft.print(title);
+  if (right) drawTitleBarValue(right);
+}
+
+void drawTitleBarValue(const char* right) {
+  tft.fillRect(176, 8, 144, 20, TFT_DARKGREY);
+  tft.setTextSize(2);
+  tft.setTextColor(TFT_WHITE, TFT_DARKGREY);
+  tft.setCursor(310 - tft.textWidth(right), 10);
+  tft.print(right);
+}
+
 void drawNavigation() {
   tft.drawFastHLine(0, 207, 320, TFT_DARKGREY);
 

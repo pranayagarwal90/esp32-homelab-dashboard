@@ -17,8 +17,19 @@ enum Page {
   PAGE_PHOTOS,
   PAGE_SCREENSAVER,
   PAGE_SETTINGS,
-  PAGE_ALERTS
+  PAGE_ALERTS,
+  PAGE_TOOLS,
+  PAGE_STOPWATCH,
+  PAGE_SNAKE,
+  PAGE_MEMORY,
+  PAGE_SIMON
 };
+
+// Games in play own the screen: no status fetches and no status redraws.
+inline bool isGamePlayPage(Page page) {
+  return page == PAGE_TTT || page == PAGE_REACTION || page == PAGE_SNAKE ||
+         page == PAGE_MEMORY || page == PAGE_SIMON;
+}
 
 constexpr int MAX_DISKS = 4;
 constexpr int MAX_CONTAINERS = 7;

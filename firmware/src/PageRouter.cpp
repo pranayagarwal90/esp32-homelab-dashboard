@@ -7,8 +7,12 @@
 #include "Screensaver.h"
 #include "ServicesScreen.h"
 #include "SettingsScreen.h"
+#include "StopwatchScreen.h"
 #include "TimeWeatherScreen.h"
+#include "games/MemoryGame.h"
 #include "games/ReactionGame.h"
+#include "games/SimonGame.h"
+#include "games/SnakeGame.h"
 #include "games/TicTacToe.h"
 
 void drawCurrentPage() {
@@ -26,6 +30,11 @@ void drawCurrentPage() {
     case PAGE_SCREENSAVER: drawScreensaverClock(); break;
     case PAGE_SETTINGS: drawSettingsPage(); break;
     case PAGE_ALERTS: drawAlertsPage(); break;
+    case PAGE_TOOLS: drawToolsPage(); break;
+    case PAGE_STOPWATCH: drawStopwatchPage(); break;
+    case PAGE_SNAKE: drawSnakePage(); break;
+    case PAGE_MEMORY: drawMemoryPage(); break;
+    case PAGE_SIMON: drawSimonPage(); break;
   }
 }
 
