@@ -2,7 +2,7 @@
 #include <WiFi.h>
 #include <freertos/semphr.h>
 #include "NetworkManager.h"
-#include "Display.h"
+#include "SystemAnimation.h"
 #include "secrets.h"
 
 static constexpr uint32_t BOOT_ATTEMPT_MS = 15000;
@@ -57,11 +57,8 @@ WifiSource activeWifiSource() {
 }
 
 void connectWiFi() {
-  tft.fillScreen(TFT_BLACK);
-  tft.setTextSize(2);
-  tft.setTextColor(TFT_CYAN, TFT_BLACK);
-  tft.setCursor(55, 95);
-  tft.print("Connecting...");
+  // Boot (or wake) animation, then Wi-Fi arcs; drawn while connecting.
+  startupAnimationBegin();
 
   wifiControl = xSemaphoreCreateMutex();
   savedAvailable = loadSavedWifi(savedCredentials);
@@ -73,13 +70,21 @@ void connectWiFi() {
   WifiCredentials credentials;
   for (;;) {
     credentialsFor(source, credentials);
+    startupAnimationSetNetwork(credentials.ssid);
     WiFi.begin(credentials.ssid, credentials.password);
-    unsigned long start = millis();
+    unsigned long start = millis(), lastDot = start;
+    // Same attempt timing as before; polled every 20 ms (yielding) instead of
+    // 500 ms so the animation can run.
     while (WiFi.status() != WL_CONNECTED && (!savedAvailable || millis() - start < BOOT_ATTEMPT_MS)) {
-      delay(500);
-      Serial.print(".");
+      startupAnimationService();
+      vTaskDelay(pdMS_TO_TICKS(20));
+      if (millis() - lastDot >= 500) {
+        lastDot = millis();
+        Serial.print(".");
+      }
     }
     if (WiFi.status() == WL_CONNECTED) break;
+    startupAnimationAttemptFailed();
     // Only reached with a saved network: alternate with the built-in one.
     WiFi.disconnect();
     source = source == WifiSource::Saved ? WifiSource::BuiltIn : WifiSource::Saved;
@@ -89,6 +94,7 @@ void connectWiFi() {
   Serial.println();
   Serial.print("ESP32 IP: ");
   Serial.println(WiFi.localIP());
+  startupAnimationFinish();
 }
 
 bool ensureWiFiConnected(uint32_t timeoutMs) {

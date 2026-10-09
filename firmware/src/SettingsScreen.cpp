@@ -233,19 +233,10 @@ static void handleBluetoothTouch(int x, int y) {
 
 // --- Sleeping -------------------------------------------------------------------------
 
+// The good-night animation (PowerManager / SystemAnimation) draws this
+// screen, including the wake hint; the view only holds the state.
 static void drawSleeping() {
   tft.fillScreen(TFT_BLACK);
-  tft.setTextSize(2);
-  tft.setTextColor(TFT_WHITE, TFT_BLACK);
-  tft.setCursor((320 - tft.textWidth("SLEEPING")) / 2, 80);
-  tft.print("SLEEPING");
-  tft.setTextSize(1);
-  tft.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
-  const char* lines[] = {"Lift your finger to continue.", "Wake: tap screen if supported, or press RST."};
-  for (int i = 0; i < 2; i++) {
-    tft.setCursor((320 - tft.textWidth(lines[i])) / 2, 120 + i * 16);
-    tft.print(lines[i]);
-  }
 }
 
 // --- Confirmation -------------------------------------------------------------------
@@ -388,7 +379,6 @@ void updateSettings() {
   serviceSettingsStore();
   updateWifiSwitch();
   updateWifiSetup();
-  updatePower();
   if (app.currentPage != PAGE_SETTINGS) return;
   if (view == SettingsView::Info && millis() - infoLastRefresh >= INFO_REFRESH_MS) drawInfoValues();
   if (view == SettingsView::Wifi) updateWifiSettings();
