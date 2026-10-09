@@ -104,10 +104,9 @@ static bool readList() {
 }
 
 // On success, *out is a malloc'd buffer of exactly outLength bytes.
-static bool readImage(const char* name, uint8_t** out, size_t* outLength) {
+static bool readBody(const String& url, int maxBytes, uint8_t** out, size_t* outLength) {
   if (WiFi.status() != WL_CONNECTED) return false;
 
-  String url = String(API_BASE) + "/photos/" + name;
   DeadlineClient client(PHOTO_IMAGE_DEADLINE_MS);
   HTTPClient http;
   http.setConnectTimeout(PHOTO_CONNECT_TIMEOUT_MS);
@@ -117,7 +116,7 @@ static bool readImage(const char* name, uint8_t** out, size_t* outLength) {
   int code = http.GET();
 
   if (code != HTTP_CODE_OK) {
-    Serial.printf("Photo HTTP error: %d\n", code);
+    Serial.printf("Download HTTP error %d: %s\n", code, url.c_str());
     http.end();
     return false;
   }
@@ -125,15 +124,15 @@ static bool readImage(const char* name, uint8_t** out, size_t* outLength) {
   // Content-Length is required; a missing or oversized length is rejected
   // before allocating.
   int len = http.getSize();
-  if (len <= 0 || len > PHOTO_MAX_BYTES) {
-    Serial.printf("Photo size invalid: %d bytes\n", len);
+  if (len <= 0 || len > maxBytes) {
+    Serial.printf("Download size invalid: %d bytes\n", len);
     http.end();
     return false;
   }
 
   uint8_t* buffer = (uint8_t*)malloc(len);
   if (!buffer) {
-    Serial.println("Not enough RAM for JPEG");
+    Serial.println("Not enough RAM for download");
     http.end();
     return false;
   }
@@ -154,7 +153,7 @@ static bool readImage(const char* name, uint8_t** out, size_t* outLength) {
   http.end();
 
   if (total != len) {
-    Serial.printf("Photo download incomplete: %d of %d bytes\n", total, len);
+    Serial.printf("Download incomplete: %d of %d bytes\n", total, len);
     free(buffer);
     return false;
   }
@@ -167,12 +166,16 @@ static void photoWorker(void*) {
   PhotoJob job;
   for (;;) {
     if (xQueueReceive(photoRequests, &job, portMAX_DELAY) != pdTRUE) continue;
-    PhotoResult result = {job.generation, job.type, false, nullptr, nullptr, 0};
+    PhotoResult result = {job.generation, job.type, false, nullptr, nullptr, 0, job.client};
     if (job.type == PhotoJobType::List) {
       result.ok = readList();
       if (result.ok) result.list = &photoListSlot;
+    } else if (job.type == PhotoJobType::Image) {
+      result.ok = readBody(String(API_BASE) + "/photos/" + job.name, PHOTO_MAX_BYTES,
+                           &result.jpeg, &result.jpegLength);
     } else {
-      result.ok = readImage(job.name, &result.jpeg, &result.jpegLength);
+      int limit = min((int)job.maxBytes, PHOTO_MAX_BYTES);
+      result.ok = readBody(String(API_BASE) + job.name, limit, &result.jpeg, &result.jpegLength);
     }
     xQueueSend(photoResults, &result, portMAX_DELAY);
     // The list slot and JPEG buffer now belong to the main task until it
@@ -181,8 +184,9 @@ static void photoWorker(void*) {
 }
 
 void setupPhotoWorker() {
-  photoRequests = xQueueCreate(1, sizeof(PhotoJob));
-  photoResults = xQueueCreate(1, sizeof(PhotoResult));
+  // Two slots: Photos and Radar may each have one job outstanding.
+  photoRequests = xQueueCreate(2, sizeof(PhotoJob));
+  photoResults = xQueueCreate(2, sizeof(PhotoResult));
   if (photoRequests && photoResults &&
       xTaskCreate(photoWorker, "photos", PHOTO_STACK_BYTES, nullptr, 1, nullptr) == pdPASS) return;
   if (photoRequests) vQueueDelete(photoRequests);
@@ -195,6 +199,9 @@ bool submitPhotoJob(const PhotoJob& job) {
   return photoRequests && xQueueSend(photoRequests, &job, 0) == pdTRUE;
 }
 
-bool receivePhotoResult(PhotoResult& result) {
-  return photoResults && xQueueReceive(photoResults, &result, 0) == pdTRUE;
+bool receivePhotoResult(WorkerClient client, PhotoResult& result) {
+  // Only the main task receives, so a peeked result is still there to take.
+  if (!photoResults || xQueuePeek(photoResults, &result, 0) != pdTRUE) return false;
+  if (result.client != client) return false;
+  return xQueueReceive(photoResults, &result, 0) == pdTRUE;
 }

@@ -11,6 +11,7 @@
 #include "MenuScreens.h"
 #include "PageRouter.h"
 #include "PhotoScreen.h"
+#include "RadarScreen.h"
 #include "Screensaver.h"
 #include "ServicesScreen.h"
 #include "SettingsScreen.h"
@@ -77,6 +78,10 @@ void handleTouch() {
   }
   if (app.currentPage == PAGE_PHOTOS) {
     handlePhotosTouch(x, y);
+    return;
+  }
+  if (app.currentPage == PAGE_RADAR) {
+    handleRadarTouch(x, y);
     return;
   }
   if (app.currentPage == PAGE_GAMES) {

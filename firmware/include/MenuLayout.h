@@ -27,6 +27,7 @@ static const MoreApp MORE_APPS[] = {
   {"ALERTS", UiIcon::Alerts, UiColor::Orange, UiColor::White, PAGE_ALERTS},
   {"GAMES", UiIcon::Games, UiColor::Green, UiColor::White, PAGE_GAMES},
   {"CLOCKS", UiIcon::Clocks, UiColor::Grey, UiColor::White, PAGE_TIME},
+  {"RADAR", UiIcon::Radar, UiColor::Blue, UiColor::Green, PAGE_RADAR},
 };
 constexpr int MORE_APP_COUNT = sizeof(MORE_APPS) / sizeof(MORE_APPS[0]);
 

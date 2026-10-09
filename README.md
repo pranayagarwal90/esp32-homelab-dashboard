@@ -197,6 +197,7 @@ g++ -std=c++11 -Wall -Wextra -Werror -Ifirmware/include firmware/test/test_syste
 g++ -std=c++11 -Wall -Wextra -Werror -Ifirmware/include firmware/test/test_weather_logic.cpp -o /tmp/test-weather
 /tmp/test-navigation
 g++ -std=c++11 -Wall -Wextra -Werror -Ifirmware/include firmware/test/test_navigation.cpp -o /tmp/test-navigation
+g++ -std=c++11 -Wall -Wextra -Werror -Ifirmware/include firmware/test/test_radar_logic.cpp -o /tmp/test-radar && /tmp/test-radar
 /tmp/test-settings
 /tmp/test-alerts
 /tmp/test-stopwatch
@@ -230,7 +231,8 @@ subsystem has a header in `firmware/include/` and a source in `firmware/src/`:
 | `MenuLayout.h` | Pure, data-driven MORE launcher and GAMES menu layout and hit-testing |
 | `TouchHandler` | XPT2046 read, calibration, debounce, wake, backlight boost, dispatch |
 | `StatusClient` | FreeRTOS `/api/status` worker, snapshot hand-off, refresh timing |
-| `PhotoClient` | FreeRTOS worker for `/api/photos` and JPEG downloads; hands the JPEG buffer to the main task |
+| `PhotoClient` | FreeRTOS worker for `/api/photos`, photo JPEGs and Radar downloads (one at a time, results routed to the submitting screen); hands the buffer to the main task |
+| `RadarScreen`, `RadarLogic.h` | MORE > RADAR loop; pure, host-tested metadata validation, frame player, request generations and labels |
 | `SettingsScreen`, `DisplaySettingsScreen`, `WifiSettingsScreen` | SETTINGS tab and its sub-pages |
 | `DeviceSettings.h`, `SettingsLogic.h` | Pure, host-tested settings model, NVS encoding, navigation and formatting |
 | `SettingsStore` | NVS persistence (debounced, change-only writes) and the saved Wi-Fi network |
@@ -245,7 +247,7 @@ subsystem has a header in `firmware/include/` and a source in `firmware/src/`:
 | `SystemAnimation`, `SystemAnimationLogic.h` | Boot, wake, Wi-Fi, restart, sleep and loading animations; pure, host-tested timelines |
 
 TFT drawing and JPEG decoding happen only on the Arduino loop task; the
-status and photo workers only do network I/O and never draw.
+status and photo (photos + radar) workers only do network I/O and never draw.
 `deploy-esp32.sh` mirrors all of `firmware/src/` (deleting stale files) and
 copies `firmware/include/` to the Windows project, never copying or deleting
 `secrets.h`.
@@ -282,9 +284,10 @@ BACK bar.
   Alerts (tap: ALERTS) and CPU / RAM (tap: HOMESERVER). Only areas whose data
   changed are redrawn.
 - **MORE**: an app launcher of icon tiles (`MORE_APPS` in `MenuLayout.h`;
-  a ninth app adds a page): HomeServer (the detailed metrics page that used to
-  be HOME), Services, Weather, Calendar, Photos, Alerts, Games and Clocks
-  (the former TIME / WEATHER page with local time and world clocks).
+  eight per page, `<` / `>` in the header switch pages): HomeServer (the
+  detailed metrics page that used to be HOME), Services, Weather, Calendar,
+  Photos, Alerts, Games and Clocks (the former TIME / WEATHER page with local
+  time and world clocks), then Radar on page 2.
 - **SETTINGS**: SYSTEM, CONNECTIVITY, DISPLAY, UTILITIES (Stopwatch). The root
   has no BACK; categories return to it.
 - **SERVICES**: one row per health check with a green (online), red
@@ -347,6 +350,88 @@ runs at 8 fps only while WEATHER is visible, inside its own 132x84 region;
 status updates redraw only text that changed, and the scene restarts only
 when the condition or day/night changes. Open-Meteo provides no severe-weather
 alerts, so there are none.
+
+## Weather radar
+
+MORE (page 2) > RADAR loops the latest radar around the weather location:
+up to six past frames, 10 minutes apart, 750 ms each with a 1.5 s hold on the
+newest. It starts on the newest frame, shows that frame's local time in the
+title bar and `n/6` (or `STALE`) in the footer, and PLAY / PAUSE and BACK in
+the bottom bar. `LOADING RADAR...` shows until the first frame arrives;
+`RADAR UNAVAILABLE` when the backend has no radar or cannot be reached.
+
+```
+RainViewer weather-maps.json  -> backend (radar.py, background thread)
+RainViewer radar tiles (z7)   -> + OpenStreetMap tiles -> 300x156 JPEG frames
+                                 -> backend/radar-cache/ -> /api/radar, /radar/<time>.jpg
+                                 -> ESP32 photo worker (one frame at a time) -> TJpg_Decoder
+```
+
+**Provider.** [RainViewer Weather Maps API](https://www.rainviewer.com/api.html):
+no API key; personal and educational use; availability is not guaranteed.
+Since January 2026 the free API serves only past radar (about 2 hours, 10-minute
+steps), only the Universal Blue colour scheme, zoom 7 at most and 100
+requests per IP per minute; nowcast (future) frames were discontinued and are
+never used. The basemap is OpenStreetMap's standard tiles
+([tile usage policy](https://operations.osmfoundation.org/policies/tiles/)),
+greyed and inverted so precipitation stands out; `RADAR_BASEMAP_URL` switches
+the tile server.
+
+**Attribution.** The radar page always shows
+`Radar: RainViewer  Map: (c) OpenStreetMap`; `/api/radar` returns
+`attribution` and `map_attribution`. Data © RainViewer
+(https://www.rainviewer.com), map © OpenStreetMap contributors.
+
+**Backend.** `GET /api/radar` answers from the cache immediately and, when a
+refresh is due, starts one in the background (single flight):
+
+```json
+{"available": true, "updating": false, "stale": false, "updated": 1791563145,
+ "width": 300, "height": 156, "utc_offset": -14400,
+ "frames": [{"time": 1791559800, "url": "/radar/1791559800.jpg"}],
+ "attribution": "RainViewer", "map_attribution": "OpenStreetMap contributors"}
+```
+
+Before the first successful refresh it is `{"available": false, "updating": true|false, ...}`.
+Frame URLs are local; the response never contains provider URLs or the
+location. Radar is not part of `/api/status`.
+
+**Cache.** `backend/radar-cache/` (ignored by Git) holds the frames and the
+basemap tiles. Provider metadata is read at most every 5 minutes (60 s after
+a failure), and only while someone opens Radar. A frame is rendered once,
+when it first appears (6 radar tiles), and kept until it leaves the latest
+six; unchanged metadata costs one request. OSM tiles are kept at least 7 days
+(or their `max-age`), then revalidated with `If-None-Match` /
+`If-Modified-Since`; an expired tile is still used if OSM is unreachable. A
+first refresh is about 43 requests (1 metadata, 6 OSM, 36 radar tiles) and
+15-20 s; frames are about 13 KB.
+
+**Failures.** If RainViewer fails, the cached frames keep being served with
+`"stale": true` (also after 20 minutes without a successful refresh, and
+after a backend restart until the first refresh). A frame whose tiles fail
+or are malformed is skipped and retried on the next refresh. With nothing
+cached the endpoint reports `available: false` and the ESP32 shows
+`RADAR UNAVAILABLE`, rechecking every 30 s (every 3 s while the backend says
+it is updating). A failed frame download on the ESP32 keeps the current frame
+on screen and retries after 2 s (30 s after three failures, when it also
+re-reads the frame list).
+
+**ESP32.** Radar reuses the photo worker task (no new task): Radar jobs are
+`Fetch` jobs for an `API_BASE` path, and each result is delivered only to the
+screen that asked for it. At most one compressed frame (cap 48 KB) waits in
+RAM while the current one is shown; frames are drawn straight over the
+previous one, so there is no black flash. Leaving the page, BACK or the
+screensaver invalidates the in-flight request (its result is freed, never
+drawn) and stops the loop; waking returns to Radar and reloads the frame that
+was showing. Status updates never redraw the page. A six-frame loop is about
+78 KB every ~5.3 s while Radar is open.
+
+**Troubleshooting.** `curl http://<homeserver>:8090/api/radar` shows the
+state; `updating: true` with `available: false` means the first frames are
+being generated (about 20 s). Delete `backend/radar-cache/` to force a full
+rebuild. A persistent `stale: true` means RainViewer (or the network) is
+failing; OSM blocks clients without an identifying User-Agent, which the
+backend sends (`HomelabDashboard/1.0 (+repository URL)`).
 
 ## System animations
 

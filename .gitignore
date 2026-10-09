@@ -2,6 +2,9 @@
 photos-source/
 photos-ready/
 
+# Generated radar frames and basemap tiles
+radar-cache/
+
 # Local backups
 *.backup-*
 *.bak

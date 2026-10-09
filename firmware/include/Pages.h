@@ -23,7 +23,8 @@ enum Page {
   PAGE_MEMORY,
   PAGE_SIMON,
   PAGE_WEATHER,
-  PAGE_HOMESERVER     // Detailed host metrics (the former HOME).
+  PAGE_HOMESERVER,    // Detailed host metrics (the former HOME).
+  PAGE_RADAR          // Weather radar loop.
 };
 
 // Games in play own the screen: no status fetches and no status redraws.

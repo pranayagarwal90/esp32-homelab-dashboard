@@ -11,6 +11,8 @@ import os
 import subprocess
 import time
 
+from radar import RadarService
+
 BASE_DIR = Path(__file__).resolve().parent
 PHOTOS_DIR = BASE_DIR / "photos-ready"
 
@@ -22,6 +24,10 @@ WEATHER_LON = -77.49
 WEATHER_CACHE_SECONDS = 900
 WEATHER_HOURLY_MAX = 8
 LOCAL_TIMEZONE = "America/New_York"
+
+# Radar frames around the weather location; generated, never committed.
+RADAR_CACHE_DIR = BASE_DIR / "radar-cache"
+RADAR = RadarService(RADAR_CACHE_DIR, WEATHER_LAT, WEATHER_LON, LOCAL_TIMEZONE)
 
 _weather_cache = None
 _weather_cache_time = 0
@@ -582,6 +588,28 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json({"photos": list_photos()})
             return
 
+        if self.path == "/api/radar":
+            self.send_json(RADAR.metadata())
+            return
+
+        if self.path.startswith("/radar/"):
+            frame = RADAR.frame_path(self.path[len("/radar/"):])
+            if frame is None:
+                self.send_error(404)
+                return
+            try:
+                data = frame.read_bytes()
+            except OSError:
+                self.send_error(404)
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", "image/jpeg")
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Cache-Control", "no-cache")
+            self.end_headers()
+            self.wfile.write(data)
+            return
+
         if self.path.startswith("/photos/"):
             filename = Path(unquote(self.path[len("/photos/"):])).name
             photo = PHOTOS_DIR / filename
@@ -613,5 +641,5 @@ server = HTTPServer(("0.0.0.0", 8090), Handler)
 print("Homelab Dashboard API")
 print("Listening on 0.0.0.0:8090")
 print("Windows metrics:", WINDOWS_METRICS_URL)
-print("Endpoints: /api/status, /api/photos, /photos/<file>")
+print("Endpoints: /api/status, /api/photos, /photos/<file>, /api/radar, /radar/<time>.jpg")
 server.serve_forever()

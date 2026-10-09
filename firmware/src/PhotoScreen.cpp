@@ -183,7 +183,7 @@ void updatePhotos() {
   if (app.currentPage != PAGE_SCREENSAVER) photoTracker.cancel(PhotoPurpose::Screensaver);
 
   PhotoResult result;
-  if (receivePhotoResult(result)) handlePhotoResult(result);
+  if (receivePhotoResult(WorkerClient::Photos, result)) handlePhotoResult(result);
   else pumpPhotoRequests();
 }
 

@@ -91,6 +91,10 @@ static const IconStep UTILITIES_SHAPE[] = {
   T(5, 19, 14, 10), T(6, 20, 15, 11), FC(17, 7, 5), CUT(FC(20, 4, 2)), CUT(FR(18, 2, 4, 3)), FC(5, 19, 2),
 };
 // Arcs (45..135 degrees, radii 16 / 11 / 6 about (12, 20)) as segments.
+// Radar scope: two rings, a sweep and a blip (accent).
+static const IconStep RADAR_SHAPE[] = {
+  C(12, 12, 10), C(12, 12, 6), FC(12, 12, 1), ALT(T(12, 12, 19, 5)), ALT(FC(16, 15, 2)),
+};
 static const IconStep WIFI_SHAPE[] = {
   T(1, 9, 6, 5), T(6, 5, 11, 4), T(12, 4, 17, 5), T(17, 5, 22, 9),
   T(4, 12, 8, 10), T(8, 10, 11, 9), T(12, 9, 15, 10), T(15, 10, 19, 12),
@@ -167,6 +171,7 @@ inline IconShape uiIconShape(UiIcon icon) {
     case UiIcon::DeviceInfo: return ICON_SHAPE(DEVICE_INFO_SHAPE);
     case UiIcon::Restart: return ICON_SHAPE(RESTART_SHAPE);
     case UiIcon::Sleep: return ICON_SHAPE(SLEEP_SHAPE);
+    case UiIcon::Radar: return ICON_SHAPE(RADAR_SHAPE);
     case UiIcon::Count: break;
   }
   return IconShape{nullptr, 0};

@@ -6,7 +6,7 @@
 enum class UiIcon : uint8_t {
   Home, More, Settings, HomeServer, Services, Weather, Calendar, Photos, Alerts, Games,
   Clocks, Stopwatch, System, Connectivity, Display, Utilities, Wifi, Bluetooth, Brightness,
-  Screensaver, Firmware, DeviceInfo, Restart, Sleep,
+  Screensaver, Firmware, DeviceInfo, Restart, Sleep, Radar,
   Count
 };
 

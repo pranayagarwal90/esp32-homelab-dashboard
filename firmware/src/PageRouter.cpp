@@ -5,6 +5,7 @@
 #include "HomeServerStatusScreen.h"
 #include "MenuScreens.h"
 #include "PhotoScreen.h"
+#include "RadarScreen.h"
 #include "Screensaver.h"
 #include "ServicesScreen.h"
 #include "SettingsScreen.h"
@@ -38,6 +39,7 @@ void drawCurrentPage() {
     case PAGE_SIMON: drawSimonPage(); break;
     case PAGE_WEATHER: drawWeatherPage(); break;
     case PAGE_HOMESERVER: drawHomeServerPage(); break;
+    case PAGE_RADAR: drawRadarPage(); break;
   }
 }
 

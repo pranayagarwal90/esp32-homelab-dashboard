@@ -10,6 +10,7 @@
 #include "PageRouter.h"
 #include "PowerManager.h"
 #include "PhotoScreen.h"
+#include "RadarScreen.h"
 #include "Screensaver.h"
 #include "SettingsScreen.h"
 #include "SettingsStore.h"
@@ -23,7 +24,7 @@
 #include "games/SnakeGame.h"
 
 // All TFT drawing and JPEG decoding happen on this (the Arduino loop) task.
-// The status and photo workers only do network I/O and never draw.
+// The status and photo (photos + radar) workers only do network I/O and never draw.
 TFT_eSPI tft = TFT_eSPI();
 
 void setup() {
@@ -65,6 +66,7 @@ void loop() {
   updateWeatherPage();
   updateScreensaver();
   updatePhotos();
+  updateRadar();
   updateSettings();
   processStatusResult();
   updateBacklight();
