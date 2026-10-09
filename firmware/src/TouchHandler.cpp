@@ -2,6 +2,8 @@
 #include <SPI.h>
 #include <XPT2046_Touchscreen.h>
 #include "TouchHandler.h"
+#include "AlertLogic.h"
+#include "AlertsScreen.h"
 #include "AppState.h"
 #include "BacklightPwm.h"
 #include "CalendarScreen.h"
@@ -10,8 +12,12 @@
 #include "PhotoScreen.h"
 #include "Screensaver.h"
 #include "SettingsScreen.h"
+#include "StopwatchScreen.h"
 #include "TimeWeatherScreen.h"
+#include "games/MemoryGame.h"
 #include "games/ReactionGame.h"
+#include "games/SimonGame.h"
+#include "games/SnakeGame.h"
 #include "games/TicTacToe.h"
 
 #define TOUCH_CLK 25
@@ -80,6 +86,34 @@ void handleTouch() {
   }
   if (app.currentPage == PAGE_SETTINGS) {
     handleSettingsTouch(x, y);
+    return;
+  }
+  if (app.currentPage == PAGE_TOOLS) {
+    handleToolsMenuTouch(x, y);
+    return;
+  }
+  if (app.currentPage == PAGE_SIMON) {
+    handleSimonTouch(x, y);
+    return;
+  }
+  if (app.currentPage == PAGE_MEMORY) {
+    handleMemoryTouch(x, y);
+    return;
+  }
+  if (app.currentPage == PAGE_SNAKE) {
+    handleSnakeTouch(x, y);
+    return;
+  }
+  if (app.currentPage == PAGE_STOPWATCH) {
+    handleStopwatchTouch(x, y);
+    return;
+  }
+  if (app.currentPage == PAGE_ALERTS) {
+    handleAlertsTouch(x, y);
+    return;
+  }
+  if (app.currentPage == PAGE_HOME && alertBadgeHit(x, y)) {
+    openAlerts(PAGE_HOME);
     return;
   }
   // MORE menu touches outside its buttons fall through to the nav bar.

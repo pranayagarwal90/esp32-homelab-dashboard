@@ -6,6 +6,8 @@
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
 #include "StatusClient.h"
+#include "AlertLogic.h"
+#include "AlertManager.h"
 #include "ApiConfig.h"
 #include "AppState.h"
 #include "BacklightPwm.h"
@@ -122,6 +124,8 @@ static StatusOutcome readStatus(const StatusRequest& request, StatusSnapshot& sn
   time.currentYear = request.year;
   time.currentMonth = request.month;
   time.currentDay = request.day;
+  // Older backends without the key always reported live host metrics.
+  metrics.hostAvailable = doc["host_available"] | true;
   metrics.uptimeHours = doc["uptime_hours"] | 0.0;
   metrics.cpuPercent = doc["cpu"]["percent"] | 0.0;
 
@@ -170,6 +174,16 @@ static StatusOutcome readStatus(const StatusRequest& request, StatusSnapshot& sn
   services.serviceOllama = doc["services"]["ollama"] | false;
   services.serviceCloudflare = doc["services"]["cloudflare"] | false;
   services.serviceTechnicalBlog = doc["services"]["technical_blog"] | false;
+  services.serviceMetube = doc["services"]["metube"] | false;
+
+  static const struct { const char* key; AlertService service; } MONITORED[] = {
+    {"jellyfin", ALERT_JELLYFIN}, {"navidrome", ALERT_NAVIDROME}, {"metube", ALERT_METUBE},
+    {"ollama", ALERT_OLLAMA}, {"cloudflare", ALERT_CLOUDFLARE},
+  };
+  services.alertReported = 0;
+  for (const auto& monitored : MONITORED) {
+    if (doc["services"][monitored.key].is<bool>()) services.alertReported |= 1u << monitored.service;
+  }
 
   time.localTime = doc["timezones"]["local"]["time"].as<String>();
   time.localDate = doc["timezones"]["local"]["date"].as<String>();
@@ -232,8 +246,12 @@ void fetchHomelabStatus() {
   if (!statusRequests || statusInFlight) return;
   StatusRequest request = {app.time.currentYear, app.time.currentMonth, app.time.currentDay};
   if (xQueueSend(statusRequests, &request, 0) == pdTRUE) {
+    unsigned long now = millis();
+    // Refreshes overdue beyond the interval were skipped on purpose (games,
+    // photos); that time is not a backend failure.
+    if (now - lastRefresh > REFRESH_INTERVAL) alertsOnFetchPaused(now - lastRefresh - REFRESH_INTERVAL);
     statusInFlight = true;
-    lastRefresh = millis();
+    lastRefresh = now;
   }
 }
 
@@ -255,13 +273,29 @@ void processStatusResult() {
   StatusResult result;
   if (!statusResults || xQueueReceive(statusResults, &result, 0) != pdTRUE) return;
   if (result.snapshot) {
+    bool wasOnline = app.serverOnline;
     applyStatusSnapshot(*result.snapshot);
-    if (app.currentPage != PAGE_TTT && app.currentPage != PAGE_REACTION && app.currentPage != PAGE_GAMES &&
-        app.currentPage != PAGE_PHOTOS && app.currentPage != PAGE_SCREENSAVER) drawCurrentPage();
-  } else if (result.outcome == StatusOutcome::ReconnectFailed || result.outcome == StatusOutcome::HttpFailed) {
-    app.serverOnline = false;
-    if (result.outcome == StatusOutcome::ReconnectFailed && app.currentPage != PAGE_SCREENSAVER &&
-        app.currentPage != PAGE_TTT && app.currentPage != PAGE_REACTION) drawCurrentPage();
+    bool alertsChanged = alertsOnStatus();
+    // ALERTS redraws only when something it shows changed.
+    bool redraw = app.currentPage != PAGE_ALERTS || alertsChanged || !wasOnline;
+    // The stopwatch refreshes itself and shows no status.
+    if (redraw && !isGamePlayPage(app.currentPage) && app.currentPage != PAGE_GAMES &&
+        app.currentPage != PAGE_PHOTOS && app.currentPage != PAGE_SCREENSAVER &&
+        app.currentPage != PAGE_STOPWATCH) drawCurrentPage();
+  } else {
+    bool alertsChanged = alertsOnFetchFailed();
+    bool redrawn = false;
+    if (result.outcome == StatusOutcome::ReconnectFailed || result.outcome == StatusOutcome::HttpFailed) {
+      app.serverOnline = false;
+      if (result.outcome == StatusOutcome::ReconnectFailed && app.currentPage != PAGE_SCREENSAVER &&
+          !isGamePlayPage(app.currentPage) && app.currentPage != PAGE_STOPWATCH) {
+        drawCurrentPage();
+        redrawn = true;
+      }
+    }
+    if (alertsChanged && !redrawn && (app.currentPage == PAGE_HOME || app.currentPage == PAGE_ALERTS)) {
+      drawCurrentPage();
+    }
   }
   // The slot is released only after every String has been copied and drawing is done.
   lastRefresh = millis();

@@ -16,13 +16,27 @@ enum Page {
   PAGE_REACTION,
   PAGE_PHOTOS,
   PAGE_SCREENSAVER,
-  PAGE_SETTINGS
+  PAGE_SETTINGS,
+  PAGE_ALERTS,
+  PAGE_TOOLS,
+  PAGE_STOPWATCH,
+  PAGE_SNAKE,
+  PAGE_MEMORY,
+  PAGE_SIMON
 };
+
+// Games in play own the screen: no status fetches and no status redraws.
+inline bool isGamePlayPage(Page page) {
+  return page == PAGE_TTT || page == PAGE_REACTION || page == PAGE_SNAKE ||
+         page == PAGE_MEMORY || page == PAGE_SIMON;
+}
 
 constexpr int MAX_DISKS = 4;
 constexpr int MAX_CONTAINERS = 7;
 
 struct SystemMetrics {
+  // False when the backend could not read the host (cached or zero values).
+  bool hostAvailable = true;
   float uptimeHours = 0;
   float cpuPercent = 0;
   float memUsed = 0;
@@ -58,6 +72,10 @@ struct ServiceState {
   bool serviceOllama = false;
   bool serviceCloudflare = false;
   bool serviceTechnicalBlog = false;
+  bool serviceMetube = false;
+  // Monitored health keys actually present in the response (AlertService
+  // bits); a missing key is unknown, not offline.
+  uint8_t alertReported = 0;
 };
 
 struct TimeData {

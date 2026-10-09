@@ -14,8 +14,12 @@
 #include "SettingsScreen.h"
 #include "SettingsStore.h"
 #include "StatusClient.h"
+#include "StopwatchScreen.h"
 #include "TouchHandler.h"
+#include "games/MemoryGame.h"
 #include "games/ReactionGame.h"
+#include "games/SimonGame.h"
+#include "games/SnakeGame.h"
 
 // All TFT drawing and JPEG decoding happen on this (the Arduino loop) task.
 // The status and photo workers only do network I/O and never draw.
@@ -52,6 +56,10 @@ void loop() {
   handleOTA();
   handleTouch();
   updateReactionGame();
+  updateStopwatch();
+  updateSnakeGame();
+  updateMemoryGame();
+  updateSimonGame();
   updateScreensaver();
   updatePhotos();
   updateSettings();
@@ -59,7 +67,7 @@ void loop() {
   updateBacklight();
 
   if (statusRefreshDue()) {
-    if (app.currentPage != PAGE_TTT && app.currentPage != PAGE_REACTION && app.currentPage != PAGE_GAMES && app.currentPage != PAGE_PHOTOS) {
+    if (!isGamePlayPage(app.currentPage) && app.currentPage != PAGE_GAMES && app.currentPage != PAGE_PHOTOS) {
       fetchHomelabStatus();
     }
   }
