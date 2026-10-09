@@ -37,9 +37,18 @@ void drawMorePage() {
   if (morePage >= pages) morePage = 0;
   tft.fillScreen(TFT_BLACK);
   if (pages > 1) {
+    // Same pixels as "<  MORE 1/2  >", placed by the constants the touch test uses.
     char title[16];
-    snprintf(title, sizeof(title), "<  MORE %d/%d  >", morePage + 1, pages);
-    drawHeader(title);
+    snprintf(title, sizeof(title), "MORE %d/%d", morePage + 1, pages);
+    drawHeader("");
+    tft.setTextSize(2);
+    tft.setTextColor(TFT_WHITE, TFT_DARKGREY);
+    tft.setCursor(MORE_PREV_X, MORE_HEADER_TEXT_Y);
+    tft.print("<");
+    tft.setCursor(MORE_TITLE_X, MORE_HEADER_TEXT_Y);
+    tft.print(title);
+    tft.setCursor(MORE_NEXT_X, MORE_HEADER_TEXT_Y);
+    tft.print(">");
   } else {
     drawHeader("MORE");
   }
@@ -91,16 +100,11 @@ static void openMoreApp(Page page) {
 }
 
 bool handleMoreTouch(int x, int y) {
-  switch (morePagingAt(x, y)) {
-    case MorePaging::Prev:
-      morePage = (morePage + morePageCount() - 1) % morePageCount();
-      drawMorePage();
-      return true;
-    case MorePaging::Next:
-      morePage = (morePage + 1) % morePageCount();
-      drawMorePage();
-      return true;
-    case MorePaging::None: break;
+  MorePaging paging = morePagingAt(x, y);
+  if (paging != MorePaging::None) {
+    morePage = moreStepPage(morePage, paging);
+    drawMorePage();
+    return true;
   }
   int index = moreAppAt(x, y, morePage);
   if (index < 0) return false;
