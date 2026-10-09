@@ -54,6 +54,7 @@ void setup() {
 
 void loop() {
   if (handleOTA()) return;
+  if (updatePower()) return;
   handleTouch();
   updateReactionGame();
   updateStopwatch();

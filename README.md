@@ -184,12 +184,16 @@ g++ -std=c++11 -Wall -Wextra -Werror -Ifirmware/include firmware/test/test_alert
 g++ -std=c++11 -Wall -Wextra -Werror -Ifirmware/include firmware/test/test_stopwatch.cpp -o /tmp/test-stopwatch
 g++ -std=c++11 -Wall -Wextra -Werror -Ifirmware/include firmware/test/test_games.cpp -o /tmp/test-games
 /tmp/test-ota-animation
+/tmp/test-system-animation
 g++ -std=c++11 -Wall -Wextra -Werror -Ifirmware/include firmware/test/test_ota_animation.cpp -o /tmp/test-ota-animation
+/tmp/test-system-animation
+g++ -std=c++11 -Wall -Wextra -Werror -Ifirmware/include firmware/test/test_system_animation.cpp -o /tmp/test-system-animation
 /tmp/test-settings
 /tmp/test-alerts
 /tmp/test-stopwatch
 /tmp/test-games
 /tmp/test-ota-animation
+/tmp/test-system-animation
 /tmp/test-photo-requests
 /tmp/test-backlight
 pio run -d firmware -e esp32dev
@@ -222,7 +226,9 @@ subsystem has a header in `firmware/include/` and a source in `firmware/src/`:
 | `AlertLogic.h`, `AlertManager`, `AlertsScreen` | Pure, host-tested alert rules; evaluation on each status result; MORE > ALERTS page and the HOME indicator |
 | `PhotoRequestTracker.h` | Pure, host-tested request generations: stale or cancelled photo results are discarded |
 | `NetworkManager`, `OtaManager`, `BacklightPwm` | Wi-Fi connect/reconnect, ArduinoOTA, LEDC driver |
-| `OtaAnimation`, `OtaAnimationLogic.h` | Walking-man OTA progress screen; pure, host-tested frames, progress mapping and timing |
+| `OtaAnimation`, `OtaAnimationLogic.h` | Walking-man OTA progress screen; pure, host-tested progress mapping and timing |
+| `WalkerLogic.h`, `WalkerDraw` | Shared stick-figure walk cycle (OTA and sleep) |
+| `SystemAnimation`, `SystemAnimationLogic.h` | Boot, wake, Wi-Fi, restart, sleep and loading animations; pure, host-tested timelines |
 
 TFT drawing and JPEG decoding happen only on the Arduino loop task; the
 status and photo workers only do network I/O and never draw.
@@ -283,6 +289,29 @@ the screen shows UPDATE COMPLETE / Restarting... just before the reboot. A
 failed upload shows the error, how far it got and that the current firmware
 is still installed, for 10 s, then returns to the previous page. At night the
 normal touch boost brightens the screen; no setting is changed.
+
+## System animations
+
+Small TFT-primitive animations (no images, task, heap or `delay()`):
+
+- **Boot** (cold start, RST or restart): a server rack's LEDs light one by
+  one, links reach three nodes, HOMELAB READY (1.3 s).
+- **Wake** (from Settings > Sleep): the moon sets, the sun rises, GOOD
+  MORNING (1.1 s). Chosen from the ESP32 wake cause.
+- **Wi-Fi** at startup: arcs grow while connecting (with the SSID, never the
+  password), CONNECTED with a pulse and the IP (0.6 s), or WI-FI FAILED when
+  the boot loop moves on to the other network (0.8 s).
+- **Restart**: a gear turns while the rack LEDs go dark (0.9 s), then reboot.
+- **Sleep**: the stick figure walks to bed, lies down, the moon and stars come
+  out, GOOD NIGHT (2.1 s), then the existing deep sleep.
+- `drawLoadingDots()` is a reusable bouncing 3-dot loader (not used yet).
+
+Boot, wake and Wi-Fi play inside the existing blocking connect in `setup()`
+while Wi-Fi connects underneath (polled every 20 ms instead of 500 ms), so
+they add at most the intro plus 0.6 s when Wi-Fi is instant. Restart and
+sleep own the display through `updatePower()`, which makes `loop()` skip
+touch, status redraws and the screensaver until the device reboots or
+sleeps. Runtime reconnects still show OFFLINE in the header.
 
 ## Settings
 

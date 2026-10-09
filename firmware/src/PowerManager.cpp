@@ -7,23 +7,27 @@
 #include "Display.h"
 #include "SettingsLogic.h"
 #include "SettingsStore.h"
+#include "SystemAnimation.h"
 #include "TouchHandler.h"
 
+static bool restarting = false;
 static bool sleeping = false;
 static bool releasedSeen = false;
 static uint32_t releasedSince = 0;
 
 void restartDevice() {
+  // Settings are saved first; the reboot follows the ~0.9 s animation.
   flushSettings();
   Serial.println("Restarting (Settings)");
-  Serial.flush();
-  ESP.restart();
+  restarting = true;
+  systemAnimationStart(SystemAnimationType::Restart);
 }
 
 void beginSleep() {
   flushSettings();
   sleeping = true;
   releasedSeen = false;
+  systemAnimationStart(SystemAnimationType::Sleep);
 }
 
 bool sleepPending() {
@@ -50,9 +54,19 @@ static void enterDeepSleep() {
   esp_deep_sleep_start();
 }
 
-void updatePower() {
-  if (!sleeping) return;
-  if (sleepReady(touchPressed(), millis(), releasedSeen, releasedSince)) enterDeepSleep();
+bool updatePower() {
+  if (restarting) {
+    if (systemAnimationUpdate()) return true;
+    Serial.flush();
+    ESP.restart();
+  }
+  if (!sleeping) return false;
+  // The release wait runs alongside the animation, as before; deep sleep
+  // starts once both are done.
+  bool playing = systemAnimationUpdate();
+  bool released = sleepReady(touchPressed(), millis(), releasedSeen, releasedSince);
+  if (!playing && released) enterDeepSleep();
+  return true;
 }
 
 void logWakeReason() {
