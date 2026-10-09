@@ -183,10 +183,13 @@ g++ -std=c++11 -Wall -Wextra -Werror -Ifirmware/include firmware/test/test_setti
 g++ -std=c++11 -Wall -Wextra -Werror -Ifirmware/include firmware/test/test_alerts.cpp -o /tmp/test-alerts
 g++ -std=c++11 -Wall -Wextra -Werror -Ifirmware/include firmware/test/test_stopwatch.cpp -o /tmp/test-stopwatch
 g++ -std=c++11 -Wall -Wextra -Werror -Ifirmware/include firmware/test/test_games.cpp -o /tmp/test-games
+/tmp/test-ota-animation
+g++ -std=c++11 -Wall -Wextra -Werror -Ifirmware/include firmware/test/test_ota_animation.cpp -o /tmp/test-ota-animation
 /tmp/test-settings
 /tmp/test-alerts
 /tmp/test-stopwatch
 /tmp/test-games
+/tmp/test-ota-animation
 /tmp/test-photo-requests
 /tmp/test-backlight
 pio run -d firmware -e esp32dev
@@ -219,6 +222,7 @@ subsystem has a header in `firmware/include/` and a source in `firmware/src/`:
 | `AlertLogic.h`, `AlertManager`, `AlertsScreen` | Pure, host-tested alert rules; evaluation on each status result; MORE > ALERTS page and the HOME indicator |
 | `PhotoRequestTracker.h` | Pure, host-tested request generations: stale or cancelled photo results are discarded |
 | `NetworkManager`, `OtaManager`, `BacklightPwm` | Wi-Fi connect/reconnect, ArduinoOTA, LEDC driver |
+| `OtaAnimation`, `OtaAnimationLogic.h` | Walking-man OTA progress screen; pure, host-tested frames, progress mapping and timing |
 
 TFT drawing and JPEG decoding happen only on the Arduino loop task; the
 status and photo workers only do network I/O and never draw.
@@ -267,6 +271,18 @@ mismatched pair back over, and Simon replays an interrupted round from its
 first step. Game state stays until RESTART. As before, game pages skip status
 fetches (that time does not count toward the stale-data alert); the stopwatch
 keeps normal fetching but is never repainted by status updates.
+
+## OTA update screen
+
+ArduinoOTA receives the whole upload inside `handleOTA()`, so the dashboard
+is paused meanwhile and the OTA screen owns the display. A six-frame
+stick figure walks toward a house as the upload progresses (about 7 frames
+per second, stepped from the progress callback), above a progress bar,
+the percentage and "Do not power off". At 100 % he stands at the house and
+the screen shows UPDATE COMPLETE / Restarting... just before the reboot. A
+failed upload shows the error, how far it got and that the current firmware
+is still installed, for 10 s, then returns to the previous page. At night the
+normal touch boost brightens the screen; no setting is changed.
 
 ## Settings
 

@@ -53,7 +53,7 @@ void setup() {
 }
 
 void loop() {
-  handleOTA();
+  if (handleOTA()) return;
   handleTouch();
   updateReactionGame();
   updateStopwatch();
