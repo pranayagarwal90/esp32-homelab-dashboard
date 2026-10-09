@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include "MenuScreens.h"
+#include "AlertsScreen.h"
 #include "AppState.h"
 #include "CalendarScreen.h"
 #include "Display.h"
@@ -17,7 +18,8 @@ void drawMorePage() {
   drawMenuButton(165, 44, 140, 44, "CALENDAR");
   drawMenuButton(15, 96, 140, 44, "GAMES");
   drawMenuButton(165, 96, 140, 44, "PHOTOS");
-  drawMenuButton(15, 148, 290, 44, "SETTINGS");
+  drawMenuButton(15, 148, 140, 44, "ALERTS");
+  drawMenuButton(165, 148, 140, 44, "SETTINGS");
 
   drawNavigation();
 }
@@ -48,7 +50,8 @@ bool handleMoreTouch(int x, int y) {
   }
 
   if (y >= 145 && y <= 200) {
-    openSettings();
+    if (x < 160) openAlerts(PAGE_MORE);
+    else openSettings();
     return true;
   }
 

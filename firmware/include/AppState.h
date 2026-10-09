@@ -16,13 +16,16 @@ enum Page {
   PAGE_REACTION,
   PAGE_PHOTOS,
   PAGE_SCREENSAVER,
-  PAGE_SETTINGS
+  PAGE_SETTINGS,
+  PAGE_ALERTS
 };
 
 constexpr int MAX_DISKS = 4;
 constexpr int MAX_CONTAINERS = 7;
 
 struct SystemMetrics {
+  // False when the backend could not read the host (cached or zero values).
+  bool hostAvailable = true;
   float uptimeHours = 0;
   float cpuPercent = 0;
   float memUsed = 0;
@@ -58,6 +61,10 @@ struct ServiceState {
   bool serviceOllama = false;
   bool serviceCloudflare = false;
   bool serviceTechnicalBlog = false;
+  bool serviceMetube = false;
+  // Monitored health keys actually present in the response (AlertService
+  // bits); a missing key is unknown, not offline.
+  uint8_t alertReported = 0;
 };
 
 struct TimeData {

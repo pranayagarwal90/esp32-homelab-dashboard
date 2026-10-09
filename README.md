@@ -180,7 +180,9 @@ python3 -m unittest discover -s backend -p 'test_*.py' -v
 g++ -std=c++11 -Wall -Wextra -Werror -Ifirmware/include firmware/test/test_backlight.cpp -o /tmp/test-backlight
 g++ -std=c++11 -Wall -Wextra -Werror -Ifirmware/include firmware/test/test_photo_requests.cpp -o /tmp/test-photo-requests
 g++ -std=c++11 -Wall -Wextra -Werror -Ifirmware/include firmware/test/test_settings.cpp -o /tmp/test-settings
+g++ -std=c++11 -Wall -Wextra -Werror -Ifirmware/include firmware/test/test_alerts.cpp -o /tmp/test-alerts
 /tmp/test-settings
+/tmp/test-alerts
 /tmp/test-photo-requests
 /tmp/test-backlight
 pio run -d firmware -e esp32dev
@@ -207,6 +209,7 @@ subsystem has a header in `firmware/include/` and a source in `firmware/src/`:
 | `SettingsStore` | NVS persistence (debounced, change-only writes) and the saved Wi-Fi network |
 | `WifiProvisioning` | Temporary setup hotspot and web form, served from its own task |
 | `PowerManager`, `BluetoothControl` | Restart, deep sleep, boot-time Bluetooth controller |
+| `AlertLogic.h`, `AlertManager`, `AlertsScreen` | Pure, host-tested alert rules; evaluation on each status result; MORE > ALERTS page and the HOME indicator |
 | `PhotoRequestTracker.h` | Pure, host-tested request generations: stale or cancelled photo results are discarded |
 | `NetworkManager`, `OtaManager`, `BacklightPwm` | Wi-Fi connect/reconnect, ArduinoOTA, LEDC driver |
 
@@ -215,6 +218,26 @@ status and photo workers only do network I/O and never draw.
 `deploy-esp32.sh` mirrors all of `firmware/src/` (deleting stale files) and
 copies `firmware/include/` to the Windows project, never copying or deleting
 `secrets.h`.
+
+## Alerts
+
+The dashboard evaluates active alerts on the device whenever a status result
+arrives (no extra task, no backend changes). Alerts are active conditions
+only: they clear by themselves, with no acknowledgement or history.
+
+| Alert | Severity | Rule |
+|---|---|---|
+| Jellyfin, Navidrome, MeTube, Ollama, Cloudflare offline | WARNING | Health key reported `false`; a missing key is unknown, never an outage |
+| RAM, each disk (C:, D:, E: when reported) | WARNING / CRITICAL | Warning from 85 % until below 82 %; critical from 95 % until below 92 %, then warning |
+| Status data stale | WARNING | At least 3 consecutive failed fetches and 60 s since the last success |
+
+When `/api/status` reports `host_available: false` (cached or zero host
+metrics) RAM and disk alerts keep their previous state. A disk missing from a
+valid report clears its alert. Time on the Games and Photos pages, which skip
+status refreshes, never counts toward staleness. HOME shows `ALL GOOD`,
+`2 WARNINGS` or `1 CRITICAL +2` on the RAM line; tap it, or MORE > ALERTS, to
+see the list (three per page, PREV / NEXT). Thresholds live in
+`firmware/include/AlertLogic.h`.
 
 ## Settings
 

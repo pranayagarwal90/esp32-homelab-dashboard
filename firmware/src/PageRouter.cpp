@@ -1,4 +1,5 @@
 #include "PageRouter.h"
+#include "AlertsScreen.h"
 #include "CalendarScreen.h"
 #include "HomeScreen.h"
 #include "MenuScreens.h"
@@ -24,6 +25,7 @@ void drawCurrentPage() {
     case PAGE_PHOTOS: drawPhotosPage(); break;
     case PAGE_SCREENSAVER: drawScreensaverClock(); break;
     case PAGE_SETTINGS: drawSettingsPage(); break;
+    case PAGE_ALERTS: drawAlertsPage(); break;
   }
 }
 

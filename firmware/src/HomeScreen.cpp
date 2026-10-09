@@ -1,6 +1,7 @@
 #include <Arduino.h>
 #include "HomeScreen.h"
 #include "AppState.h"
+#include "AlertsScreen.h"
 #include "Display.h"
 #include "UiHelpers.h"
 
@@ -87,6 +88,7 @@ void drawHomePage() {
   tft.setTextColor(TFT_DARKGREY, TFT_BLACK);
   tft.setCursor(14, 75);
   tft.printf("RAM %.1f / %.1f GB", metrics.memUsed, metrics.memTotal);
+  drawAlertBadge();
 
   tft.drawFastHLine(10, 89, 300, TFT_DARKGREY);
 

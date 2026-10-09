@@ -2,6 +2,8 @@
 #include <SPI.h>
 #include <XPT2046_Touchscreen.h>
 #include "TouchHandler.h"
+#include "AlertLogic.h"
+#include "AlertsScreen.h"
 #include "AppState.h"
 #include "BacklightPwm.h"
 #include "CalendarScreen.h"
@@ -80,6 +82,14 @@ void handleTouch() {
   }
   if (app.currentPage == PAGE_SETTINGS) {
     handleSettingsTouch(x, y);
+    return;
+  }
+  if (app.currentPage == PAGE_ALERTS) {
+    handleAlertsTouch(x, y);
+    return;
+  }
+  if (app.currentPage == PAGE_HOME && alertBadgeHit(x, y)) {
+    openAlerts(PAGE_HOME);
     return;
   }
   // MORE menu touches outside its buttons fall through to the nav bar.
