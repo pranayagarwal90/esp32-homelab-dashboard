@@ -40,7 +40,8 @@ static void testBackTargets() {
   assert(appBackTarget(PAGE_WEATHER, PAGE_TIME) == PAGE_TIME);
   assert(appBackTarget(PAGE_WEATHER, PAGE_MORE) == PAGE_MORE);
   // Apps -> MORE; games -> GAMES; Stopwatch -> Settings.
-  const Page apps[] = {PAGE_HOMESERVER, PAGE_SERVICES, PAGE_CALENDAR, PAGE_PHOTOS, PAGE_GAMES, PAGE_TIME};
+  const Page apps[] = {PAGE_HOMESERVER, PAGE_SERVICES, PAGE_CALENDAR, PAGE_PHOTOS, PAGE_GAMES, PAGE_TIME,
+                       PAGE_AI};
   for (Page page : apps) assert(appBackTarget(page, PAGE_HOME) == PAGE_MORE);
   const Page games[] = {PAGE_TTT, PAGE_REACTION, PAGE_SNAKE, PAGE_MEMORY, PAGE_SIMON};
   for (Page page : games) assert(appBackTarget(page, PAGE_MORE) == PAGE_GAMES);
@@ -96,31 +97,35 @@ static void testHome() {
 }
 
 static void testMore() {
-  // Seven required apps plus Clocks (world clocks), each with an icon.
+  // Seven required apps plus Clocks (world clocks) and the AI Assistant, each with an icon.
   const struct { Page page; UiIcon icon; } expected[] = {
     {PAGE_HOMESERVER, UiIcon::HomeServer}, {PAGE_SERVICES, UiIcon::Services}, {PAGE_WEATHER, UiIcon::Weather},
     {PAGE_CALENDAR, UiIcon::Calendar}, {PAGE_PHOTOS, UiIcon::Photos}, {PAGE_ALERTS, UiIcon::Alerts},
-    {PAGE_GAMES, UiIcon::Games}, {PAGE_TIME, UiIcon::Clocks},
+    {PAGE_GAMES, UiIcon::Games}, {PAGE_TIME, UiIcon::Clocks}, {PAGE_AI, UiIcon::AiAssistant},
   };
-  assert(MORE_APP_COUNT == 8);
+  assert(MORE_APP_COUNT == 9);
   for (int i = 0; i < MORE_APP_COUNT; i++) {
     assert(MORE_APPS[i].page == expected[i].page && MORE_APPS[i].icon == expected[i].icon);
     assert(strlen(MORE_APPS[i].label) * 6 <= (size_t)MORE_TILE_W); // Size-1 label fits its tile.
     for (int j = 0; j < i; j++) assert(MORE_APPS[j].page != MORE_APPS[i].page);
   }
-  // One page today; a ninth app would add a page.
-  assert(morePageCount() == 1);
-  assert(morePagingAt(20, 10) == MorePaging::None); // No paging UI with one page.
+  // The ninth app (AI ASSISTANT) opens a second page, reached by header paging.
+  assert(morePageCount() == 2);
+  assert(morePagingAt(20, 10) == MorePaging::Prev && morePagingAt(300, 10) == MorePaging::Next);
+  assert(morePagingAt(160, 10) == MorePaging::None && morePagingAt(300, 60) == MorePaging::None);
   // Tile centres map to their apps; gaps belong to a neighbour; bars excluded.
   for (int i = 0; i < MORE_APP_COUNT; i++) {
-    int col = i % MORE_COLS, row = i / MORE_COLS;
+    int page = i / MORE_PER_PAGE, slot = i % MORE_PER_PAGE;
+    int col = slot % MORE_COLS, row = slot / MORE_COLS;
     int cx = moreTileX(col) + MORE_TILE_W / 2, cy = moreTileY(row) + MORE_TILE_H / 2;
-    assert(moreAppAt(cx, cy, 0) == i);
+    assert(moreAppAt(cx, cy, page) == i);
   }
+  assert(MORE_APPS[moreAppAt(moreTileX(0) + 30, moreTileY(0) + 30, 1)].page == PAGE_AI);
+  assert(moreAppAt(moreTileX(1) + 30, moreTileY(0) + 30, 1) == -1); // Empty slots.
   assert(moreAppAt(moreTileX(1) - 2, 60, 0) >= 0);  // Gap between tiles.
   assert(moreAppAt(160, 20, 0) == -1);              // Header.
   assert(moreAppAt(160, 210, 0) == -1);             // Bottom navigation.
-  assert(moreAppAt(160, 100, 1) == -1);             // No second page.
+  assert(moreAppAt(160, 100, 2) == -1);             // No third page.
   // Tiles fit the screen above the navigation and are large.
   assert(moreTileX(MORE_COLS - 1) + MORE_TILE_W <= 320);
   assert(moreTileY(MORE_ROWS - 1) + MORE_TILE_H < NAV_Y);

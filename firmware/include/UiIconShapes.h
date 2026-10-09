@@ -91,6 +91,35 @@ static const IconStep UTILITIES_SHAPE[] = {
   T(5, 19, 14, 10), T(6, 20, 15, 11), FC(17, 7, 5), CUT(FC(20, 4, 2)), CUT(FR(18, 2, 4, 3)), FC(5, 19, 2),
 };
 // Arcs (45..135 degrees, radii 16 / 11 / 6 about (12, 20)) as segments.
+// AI: a large four-point sparkle with a small one (accent).
+static const IconStep AI_SPARKLE_SHAPE[] = {
+  TRI(10, 4, 7, 13, 13, 13), TRI(10, 22, 7, 13, 13, 13), TRI(1, 13, 10, 10, 10, 16), TRI(19, 13, 10, 10, 10, 16),
+  ALT(TRI(19, 1, 18, 5, 20, 5)), ALT(TRI(19, 9, 18, 5, 20, 5)), ALT(TRI(15, 5, 19, 4, 19, 6)), ALT(TRI(23, 5, 19, 4, 19, 6)),
+};
+// Explain status: a pulse line in a monitor.
+static const IconStep AI_STATUS_SHAPE[] = {
+  RR(1, 3, 22, 18, 3), T(4, 13, 8, 13), T(8, 13, 10, 7), T(10, 7, 13, 17), T(13, 17, 15, 11), T(15, 11, 19, 11),
+};
+// Explain alerts: warning triangle with a small sparkle (accent).
+static const IconStep AI_ALERTS_SHAPE[] = {
+  T(1, 21, 10, 4), T(10, 4, 18, 21), T(1, 21, 18, 21), FR(9, 10, 3, 6), FR(9, 17, 3, 2),
+  ALT(TRI(20, 1, 19, 4, 21, 4)), ALT(TRI(20, 7, 19, 4, 21, 4)), ALT(TRI(17, 4, 20, 3, 20, 5)), ALT(TRI(23, 4, 20, 3, 20, 5)),
+};
+// Needs attention: an eye.
+static const IconStep AI_ATTENTION_SHAPE[] = {
+  T(1, 12, 6, 7), T(6, 7, 16, 7), T(16, 7, 21, 12), T(1, 12, 6, 17), T(6, 17, 16, 17), T(16, 17, 21, 12),
+  FC(11, 12, 4), CUT(FC(11, 12, 1)),
+};
+// Suggest action: a light bulb with rays (accent).
+static const IconStep AI_ACTION_SHAPE[] = {
+  FC(12, 9, 6), FR(9, 14, 7, 4), FR(10, 19, 5, 2),
+  ALT(L(2, 9, 3, 9)), ALT(L(21, 9, 22, 9)), ALT(L(4, 2, 5, 3)), ALT(L(20, 2, 19, 3)),
+};
+// Server summary: a server with a document in front (accent).
+static const IconStep AI_SUMMARY_SHAPE[] = {
+  RR(1, 2, 14, 6, 1), RR(1, 10, 14, 6, 1), FC(4, 5, 1), FC(4, 13, 1),
+  CUT(FR(12, 8, 11, 15)), ALT(R(12, 8, 11, 15)), ALT(L(14, 12, 20, 12)), ALT(L(14, 15, 20, 15)), ALT(L(14, 18, 18, 18)),
+};
 static const IconStep WIFI_SHAPE[] = {
   T(1, 9, 6, 5), T(6, 5, 11, 4), T(12, 4, 17, 5), T(17, 5, 22, 9),
   T(4, 12, 8, 10), T(8, 10, 11, 9), T(12, 9, 15, 10), T(15, 10, 19, 12),
@@ -167,6 +196,12 @@ inline IconShape uiIconShape(UiIcon icon) {
     case UiIcon::DeviceInfo: return ICON_SHAPE(DEVICE_INFO_SHAPE);
     case UiIcon::Restart: return ICON_SHAPE(RESTART_SHAPE);
     case UiIcon::Sleep: return ICON_SHAPE(SLEEP_SHAPE);
+    case UiIcon::AiAssistant: return ICON_SHAPE(AI_SPARKLE_SHAPE);
+    case UiIcon::AiStatus: return ICON_SHAPE(AI_STATUS_SHAPE);
+    case UiIcon::AiAlerts: return ICON_SHAPE(AI_ALERTS_SHAPE);
+    case UiIcon::AiAttention: return ICON_SHAPE(AI_ATTENTION_SHAPE);
+    case UiIcon::AiAction: return ICON_SHAPE(AI_ACTION_SHAPE);
+    case UiIcon::AiSummary: return ICON_SHAPE(AI_SUMMARY_SHAPE);
     case UiIcon::Count: break;
   }
   return IconShape{nullptr, 0};

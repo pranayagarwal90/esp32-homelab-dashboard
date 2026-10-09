@@ -1,4 +1,5 @@
 #include "PageRouter.h"
+#include "AiAssistantScreen.h"
 #include "AlertsScreen.h"
 #include "CalendarScreen.h"
 #include "HomeScreen.h"
@@ -38,6 +39,8 @@ void drawCurrentPage() {
     case PAGE_SIMON: drawSimonPage(); break;
     case PAGE_WEATHER: drawWeatherPage(); break;
     case PAGE_HOMESERVER: drawHomeServerPage(); break;
+    case PAGE_AI: drawAiMenuPage(); break;
+    case PAGE_AI_RESULT: drawAiResultPage(); break;
   }
 }
 

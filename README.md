@@ -197,6 +197,8 @@ g++ -std=c++11 -Wall -Wextra -Werror -Ifirmware/include firmware/test/test_syste
 g++ -std=c++11 -Wall -Wextra -Werror -Ifirmware/include firmware/test/test_weather_logic.cpp -o /tmp/test-weather
 /tmp/test-navigation
 g++ -std=c++11 -Wall -Wextra -Werror -Ifirmware/include firmware/test/test_navigation.cpp -o /tmp/test-navigation
+# Needs ArduinoJson from a previous `pio run` (header-only):
+g++ -std=c++11 -Wall -Wextra -Werror -Ifirmware/include -Ifirmware/.pio/libdeps/esp32dev/ArduinoJson/src firmware/test/test_ai_logic.cpp -o /tmp/test-ai && /tmp/test-ai
 /tmp/test-settings
 /tmp/test-alerts
 /tmp/test-stopwatch
@@ -237,6 +239,7 @@ subsystem has a header in `firmware/include/` and a source in `firmware/src/`:
 | `WifiProvisioning` | Temporary setup hotspot and web form, served from its own task |
 | `PowerManager`, `BluetoothControl` | Restart, deep sleep, boot-time Bluetooth controller |
 | `AlertLogic.h`, `AlertManager`, `AlertsScreen` | Pure, host-tested alert rules; evaluation on each status result; MORE > ALERTS page and the HOMESERVER indicator |
+| `AiAssistantScreen`, `AiClient`, `AiLogic.h`, `AiResponse.h` | MORE > AI ASSISTANT menu and the shared answer page (also ASK AI on ALERTS / HOMESERVER); a worker created on first use; pure, host-tested modes, request body, session, parsing and wrapping |
 | `PhotoRequestTracker.h` | Pure, host-tested request generations: stale or cancelled photo results are discarded |
 | `NetworkManager`, `OtaManager`, `BacklightPwm` | Wi-Fi connect/reconnect, ArduinoOTA, LEDC driver |
 | `OtaAnimation`, `OtaAnimationLogic.h` | Walking-man OTA progress screen; pure, host-tested progress mapping and timing |
@@ -245,7 +248,7 @@ subsystem has a header in `firmware/include/` and a source in `firmware/src/`:
 | `SystemAnimation`, `SystemAnimationLogic.h` | Boot, wake, Wi-Fi, restart, sleep and loading animations; pure, host-tested timelines |
 
 TFT drawing and JPEG decoding happen only on the Arduino loop task; the
-status and photo workers only do network I/O and never draw.
+status, photo and AI workers only do network I/O and never draw.
 `deploy-esp32.sh` mirrors all of `firmware/src/` (deleting stale files) and
 copies `firmware/include/` to the Windows project, never copying or deleting
 `secrets.h`.
@@ -282,9 +285,10 @@ BACK bar.
   Alerts (tap: ALERTS) and CPU / RAM (tap: HOMESERVER). Only areas whose data
   changed are redrawn.
 - **MORE**: an app launcher of icon tiles (`MORE_APPS` in `MenuLayout.h`;
-  a ninth app adds a page): HomeServer (the detailed metrics page that used to
-  be HOME), Services, Weather, Calendar, Photos, Alerts, Games and Clocks
-  (the former TIME / WEATHER page with local time and world clocks).
+  eight per page, `<` / `>` in the header switch pages): HomeServer (the
+  detailed metrics page that used to be HOME), Services, Weather, Calendar,
+  Photos, Alerts, Games and Clocks (the former TIME / WEATHER page with local
+  time and world clocks), then AI Assistant on page 2.
 - **SETTINGS**: SYSTEM, CONNECTIVITY, DISPLAY, UTILITIES (Stopwatch). The root
   has no BACK; categories return to it.
 - **SERVICES**: one row per health check with a green (online), red
@@ -347,6 +351,119 @@ runs at 8 fps only while WEATHER is visible, inside its own 132x84 region;
 status updates redraw only text that changed, and the scene restarts only
 when the condition or day/night changes. Open-Meteo provides no severe-weather
 alerts, so there are none.
+
+## AI Assistant
+
+MORE (page 2) > AI ASSISTANT explains the current homelab status in a few
+lines, using the HomeServer's **local Ollama**. Nothing leaves the network
+(ESP32 -> HomeServer -> Ollama on the same machine); there is no cloud AI and
+no API key. It is **read-only**: it explains and suggests a check, and never
+runs commands, restarts anything or changes settings. There is no endpoint
+that executes anything. AI text can be wrong; you decide what to do.
+
+The menu asks one of five fixed questions: EXPLAIN STATUS, EXPLAIN ALERTS,
+NEEDS ATTENTION, SUGGEST ACTION, SERVER SUMMARY. ASK AI on ALERTS (title bar)
+asks about the alerts; ASK AI on HOMESERVER (bottom bar, right) asks what needs
+attention. The answer page shows a title, a short summary and a suggested
+check, with `AI - LOCAL` (or `RULES - LOCAL`, see below) and the question in
+the footer; AGAIN asks again bypassing the cache, BACK returns to where the
+question came from (AI menu, ALERTS or HOMESERVER). The answer is kept under
+the screensaver; leaving the page discards a pending one. There is no free
+text input.
+
+```
+ESP32 --POST /api/ai/explain {"mode": "...", "alerts": [codes]}--> backend
+backend: get_status() + the dashboard's alert codes -> compact facts -> Ollama
+         -> checks -> {"title", "summary", "action"}
+```
+
+**Endpoints.** `POST /api/ai/explain` takes `mode` (`status`, `alerts`,
+`attention`, `action` or `summary`), optional `refresh` (bool) and optional
+`alerts`; any other field (such as `prompt`) is rejected with 400, so the
+endpoint is not an Ollama proxy. `alerts` are the dashboard's active alerts
+as fixed codes (`{"id": "metube"|"ram"|"disk"|"stale"|..., "level":
+"warning"|"critical", "subject": "C:"}`): the alert rules (thresholds,
+hysteresis, stale data) live in the firmware, so the AI uses the dashboard's
+verdict instead of re-deriving it and can never disagree with HOME. No
+metrics come from the ESP32; the backend uses its own `/api/status` data.
+
+```json
+{"available": true, "mode": "alerts", "title": "2 items need attention",
+ "summary": "MeTube is offline and RAM usage is 87%.",
+ "action": "Check the MeTube container status and logs.",
+ "source": "ai", "engine": "primary", "generated_at": 1791565000, "cached": false}
+```
+
+On failure: `{"available": false, "mode": "...", "error": "AI response timed
+out" | "AI service is not responding" | "AI model is not installed" | "AI
+returned an unusable answer"}`. `GET /api/ai/status` returns
+`{"available", "provider": "ollama", "model"}` (cached 15 s, never generates;
+it loads the model in the background so the first answer is quick).
+
+**Engines (primary + fallback, both local).** The backend routes each
+question; the ESP32 never talks to Ollama and only learns which engine
+answered (`"engine": "primary"` or `"fallback"`, shown as `AI - GPU` /
+`AI - CPU`).
+
+| | Primary | Fallback |
+|---|---|---|
+| Where | GPU laptop on the private link (same endpoint as the blog chatbot) | HomeServer's own Ollama |
+| Config | `AI_PRIMARY_OLLAMA_URL` (unset: no primary), `AI_PRIMARY_OLLAMA_MODEL` | `AI_FALLBACK_OLLAMA_URL` (default `http://127.0.0.1:11434`), `AI_FALLBACK_OLLAMA_MODEL` |
+| Model | `qwen2.5:7b` (RTX 3070, 4.3 GB VRAM) | `llama3.2:3b` (CPU) |
+| Measured | 0.2-0.6 s warm, ~3-15 s cold load | 1.9-4.7 s warm, ~23-25 s cold load |
+| Timeout | 8 s (model loaded) / 20 s (cold) | 15 s / 30 s |
+
+The laptop address is never in the source: set it in the service
+environment, for example in a systemd drop-in:
+`Environment=AI_PRIMARY_OLLAMA_URL=http://10.10.10.1:11434`.
+(`AI_OLLAMA_URL` / `AI_OLLAMA_MODEL` still configure the fallback.)
+
+Routing: a cheap probe (`/api/tags` for the model, `/api/ps` for its load
+state; 0.8 s timeout, cached 10 s, never a generation) decides whether the
+primary is usable. If it is unreachable or lacks its model, the fallback
+answers directly. If a primary generation fails (timeout, connection, HTTP
+error, missing model, malformed reply), the fallback is tried exactly once
+within a 50 s total budget, and the primary is skipped for 30 s; after that a
+probe decides again, so a returning laptop is used automatically. Only if
+both fail does the ESP32 get an error. Wording that fails the answer checks
+is not retried on the other engine: the rules replace it. Opening the AI menu
+loads (never runs) only the engine that will answer, so the HomeServer does
+not hold the 2.3 GB CPU model while the laptop is available. Our requests keep
+a model loaded 30 minutes; a model another client pinned (the blog uses
+`keep_alive: -1`) stays pinned. Each engine keeps one `num_ctx` (2048 on the
+laptop, matching the blog's `qwen2.5:7b`, so the shared model is not reloaded).
+Models are never downloaded; `/api/ai/status` reports
+`{"available", "provider", "preferred": "primary"|"fallback"|null,
+"primary_available", "fallback_available"}` without addresses.
+
+**Prompt and checks.** The backend builds a short deterministic snapshot:
+the overall verdict, the problems from the dashboard alerts (with their
+values), healthy items by name only, offline services that have no alert, and
+unknown (unreported) items, which are not problems. No IPs, URLs, Wi-Fi
+names, container names or paths. The system prompt allows only those facts,
+no trends, no certain causes, safe read-only checks, no commands, plain text,
+two lines. Ollama runs with `stream: false`, temperature 0.2, at most 100
+tokens and a 1024-token context. The title is computed from the alert counts.
+The answer is cleaned (no markdown, URLs, emojis or non-ASCII; title <= 40,
+summary <= 220, action <= 140 characters); action clauses that restart,
+stop, delete, upgrade, add or change something, or look like a command, are
+dropped. If the summary reports problems on a healthy dashboard, misses every
+real problem, or calls a warning critical, a rule-based summary and check are
+used instead (`"source": "rules"`).
+
+**Timeouts and cache.** See the engine table; one generation per engine at a
+time. The ESP32 waits up to 55 s, and BACK always works meanwhile. The server is
+threaded, so `/api/status` stays fast during a generation. Answers are cached
+60 s per mode and status fingerprint (alerts, services, host availability,
+RAM and disks to 5%); AGAIN bypasses it. Failures are not cached.
+
+**Troubleshooting.** `curl http://<homeserver>:8090/api/ai/status`;
+`docker ps | grep ollama`; `curl http://127.0.0.1:11434/api/tags` (and the
+laptop's `http://10.10.10.1:11434/api/tags` from the HomeServer) list the
+installed models. `primary_available: false` with the laptop on: check its
+`OLLAMA_HOST` and firewall rule for the HomeServer's link address. "AI model is not installed": install it yourself
+(`ollama pull llama3.2:3b`) or set `AI_OLLAMA_MODEL`. An Ollama outage only
+affects the AI pages, never the dashboard's LIVE / OFFLINE state.
 
 ## System animations
 

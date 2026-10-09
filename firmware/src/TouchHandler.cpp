@@ -2,6 +2,7 @@
 #include <SPI.h>
 #include <XPT2046_Touchscreen.h>
 #include "TouchHandler.h"
+#include "AiAssistantScreen.h"
 #include "AlertsScreen.h"
 #include "AppState.h"
 #include "BacklightPwm.h"
@@ -77,6 +78,14 @@ void handleTouch() {
   }
   if (app.currentPage == PAGE_PHOTOS) {
     handlePhotosTouch(x, y);
+    return;
+  }
+  if (app.currentPage == PAGE_AI) {
+    handleAiMenuTouch(x, y);
+    return;
+  }
+  if (app.currentPage == PAGE_AI_RESULT) {
+    handleAiResultTouch(x, y);
     return;
   }
   if (app.currentPage == PAGE_GAMES) {
