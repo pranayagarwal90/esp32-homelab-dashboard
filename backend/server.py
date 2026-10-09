@@ -20,6 +20,7 @@ HOST_METRICS_CACHE_SECONDS = 2
 WEATHER_LAT = 39.04
 WEATHER_LON = -77.49
 WEATHER_CACHE_SECONDS = 900
+WEATHER_HOURLY_MAX = 8
 LOCAL_TIMEZONE = "America/New_York"
 
 _weather_cache = None
@@ -388,6 +389,92 @@ def solar_times(daily):
         return {}
 
 
+def _number(value):
+    """A finite JSON number, or None (booleans and strings are rejected)."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    value = float(value)
+    return value if value == value and abs(value) != float("inf") else None
+
+
+def current_details(current, daily):
+    """Optional richer current fields; each is omitted when missing or bad."""
+    details = {}
+    fields = (("feels_like_c", current.get("apparent_temperature"), 1),
+              ("wind_kmh", current.get("wind_speed_10m"), 1),
+              ("precip_mm", current.get("precipitation"), 1))
+    for key, raw, digits in fields:
+        value = _number(raw)
+        if value is not None:
+            details[key] = round(value, digits)
+    humidity = _number(current.get("relative_humidity_2m"))
+    if humidity is not None:
+        details["humidity"] = int(round(humidity))
+    try:
+        chance = _number(daily["precipitation_probability_max"][0])
+        if chance is not None:
+            details["precip_probability_max"] = int(round(chance))
+    except (KeyError, IndexError, TypeError):
+        pass
+    return details
+
+
+def hourly_source(hourly):
+    """Cached hourly forecast: (epoch, temperature, probability, code) with
+    probability/code None when missing. Entries without time/temperature are
+    skipped; a bad block yields an empty list."""
+    entries = []
+    try:
+        zone = ZoneInfo(LOCAL_TIMEZONE)
+        times = hourly["time"]
+        temps = hourly["temperature_2m"]
+        chances = hourly.get("precipitation_probability") or []
+        codes = hourly.get("weather_code") or []
+        for i, stamp in enumerate(times):
+            try:
+                moment = datetime.fromisoformat(stamp)
+                temp = _number(temps[i])
+            except (IndexError, TypeError, ValueError):
+                continue
+            if temp is None:
+                continue
+            if moment.tzinfo is None:
+                moment = moment.replace(tzinfo=zone)
+            chance = _number(chances[i]) if i < len(chances) else None
+            code = _number(codes[i]) if i < len(codes) else None
+            entries.append((int(moment.timestamp()), round(temp, 1),
+                            None if chance is None else int(round(chance)),
+                            None if code is None else int(code)))
+    except (KeyError, TypeError, AttributeError):
+        return []
+    entries.sort()
+    return entries
+
+
+def weather_payload(weather, now):
+    """The /api/status weather object: the cached fields (without private
+    ones) plus the current-hour rain chance and the next hours, chosen at
+    request time so a cached forecast never starts with a past hour."""
+    payload = {key: value for key, value in weather.items() if not key.startswith("_")}
+    source = weather.get("_hourly")
+    if not source:
+        return payload
+    zone = ZoneInfo(LOCAL_TIMEZONE)
+    upcoming = [entry for entry in source if entry[0] + 3600 > now][:WEATHER_HOURLY_MAX]
+    hourly = []
+    for epoch, temp, chance, code in upcoming:
+        item = {"h": datetime.fromtimestamp(epoch, zone).hour, "t": temp}
+        if chance is not None:
+            item["p"] = chance
+        if code is not None:
+            item["c"] = code
+        hourly.append(item)
+    payload["hourly"] = hourly
+    if upcoming and upcoming[0][0] <= now and upcoming[0][2] is not None:
+        payload["precip_probability"] = upcoming[0][2]
+    return payload
+
+
 def get_weather():
     global _weather_cache, _weather_cache_time, _weather_cache_day
 
@@ -402,8 +489,11 @@ def get_weather():
             {
                 "latitude": WEATHER_LAT,
                 "longitude": WEATHER_LON,
-                "current": "temperature_2m,weather_code",
-                "daily": "temperature_2m_max,temperature_2m_min,sunrise,sunset",
+                "current": ("temperature_2m,apparent_temperature,relative_humidity_2m,"
+                            "precipitation,weather_code,wind_speed_10m"),
+                "hourly": "temperature_2m,precipitation_probability,weather_code",
+                "daily": ("temperature_2m_max,temperature_2m_min,sunrise,sunset,"
+                          "precipitation_probability_max"),
                 "temperature_unit": "celsius",
                 "timezone": LOCAL_TIMEZONE,
                 "forecast_days": 2,
@@ -426,6 +516,9 @@ def get_weather():
             "condition": weather_description(code),
             "weather_code": code,
             **solar_times(daily),
+            **current_details(current, daily),
+            # Private: the full hourly forecast, sliced per request.
+            "_hourly": hourly_source(data.get("hourly")),
         }
 
         _weather_cache = result
@@ -465,7 +558,7 @@ def get_status():
         "docker": docker,
         "services": service_status(docker),
         "timezones": get_times(),
-        "weather": get_weather(),
+        "weather": weather_payload(get_weather(), time.time()),
         "timestamp": int(time.time()),
     }
 

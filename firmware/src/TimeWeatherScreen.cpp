@@ -52,6 +52,11 @@ void drawTimePage() {
     tft.setCursor(15, 95);
     tft.print("Weather unavailable");
   }
+  // The weather block opens the WEATHER page.
+  tft.setTextSize(1);
+  tft.setTextColor(TFT_DARKGREY, TFT_BLACK);
+  tft.setCursor(312 - tft.textWidth("FORECAST >"), 95);
+  tft.print("FORECAST >");
 
   tft.drawFastHLine(10, 120, 300, TFT_DARKGREY);
   drawTimeRow("India", time.indiaTime, 135);
@@ -60,6 +65,7 @@ void drawTimePage() {
   drawBackBar(nullptr, "BACK", nullptr);
 }
 
-void handleTimeTouch(int, int y) {
+void handleTimeTouch(int x, int y) {
   if (y >= 205) showPage(PAGE_MORE);
+  else if (timeWeatherBlockHit(x, y)) showPage(PAGE_WEATHER);
 }

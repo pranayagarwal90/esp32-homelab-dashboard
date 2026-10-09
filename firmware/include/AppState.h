@@ -1,5 +1,6 @@
 #pragma once
 #include <Arduino.h>
+#include "WeatherLogic.h"
 
 // Application state shared between screens. Main task only: the status worker
 // fills a private snapshot that StatusClient copies in here.
@@ -22,7 +23,8 @@ enum Page {
   PAGE_STOPWATCH,
   PAGE_SNAKE,
   PAGE_MEMORY,
-  PAGE_SIMON
+  PAGE_SIMON,
+  PAGE_WEATHER
 };
 
 // Games in play own the screen: no status fetches and no status redraws.
@@ -95,6 +97,21 @@ struct WeatherData {
   float lowC = 0;
   String weatherCondition = "Unknown";
   bool weatherAvailable = false;
+  // Rich weather (optional backend fields; WEATHER_NO_VALUE / -1 if absent).
+  int16_t weatherCode = -1;
+  int16_t feelsLike10 = WEATHER_NO_VALUE;
+  int16_t wind10 = WEATHER_NO_VALUE;      // km/h x10.
+  int8_t humidity = -1;
+  int8_t precipChance = -1;               // Current hour.
+  int8_t precipChanceMax = -1;            // Today.
+  uint8_t hourlyCount = 0;
+  HourlyForecast hourly[WEATHER_HOURLY_MAX];
+  // Day/night and sunrise/sunset display.
+  uint32_t sunrise = 0;
+  uint32_t sunset = 0;
+  uint32_t localMidnight = 0;             // solar_day_start: gives the UTC offset.
+  uint32_t observedAt = 0;                // Status timestamp (Unix).
+  uint32_t observedMs = 0;                // millis() when applied.
 };
 
 struct AppState {

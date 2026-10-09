@@ -185,15 +185,20 @@ g++ -std=c++11 -Wall -Wextra -Werror -Ifirmware/include firmware/test/test_stopw
 g++ -std=c++11 -Wall -Wextra -Werror -Ifirmware/include firmware/test/test_games.cpp -o /tmp/test-games
 /tmp/test-ota-animation
 /tmp/test-system-animation
+/tmp/test-weather
 g++ -std=c++11 -Wall -Wextra -Werror -Ifirmware/include firmware/test/test_ota_animation.cpp -o /tmp/test-ota-animation
 /tmp/test-system-animation
+/tmp/test-weather
 g++ -std=c++11 -Wall -Wextra -Werror -Ifirmware/include firmware/test/test_system_animation.cpp -o /tmp/test-system-animation
+/tmp/test-weather
+g++ -std=c++11 -Wall -Wextra -Werror -Ifirmware/include firmware/test/test_weather_logic.cpp -o /tmp/test-weather
 /tmp/test-settings
 /tmp/test-alerts
 /tmp/test-stopwatch
 /tmp/test-games
 /tmp/test-ota-animation
 /tmp/test-system-animation
+/tmp/test-weather
 /tmp/test-photo-requests
 /tmp/test-backlight
 pio run -d firmware -e esp32dev
@@ -228,6 +233,7 @@ subsystem has a header in `firmware/include/` and a source in `firmware/src/`:
 | `NetworkManager`, `OtaManager`, `BacklightPwm` | Wi-Fi connect/reconnect, ArduinoOTA, LEDC driver |
 | `OtaAnimation`, `OtaAnimationLogic.h` | Walking-man OTA progress screen; pure, host-tested progress mapping and timing |
 | `WalkerLogic.h`, `WalkerDraw` | Shared stick-figure walk cycle (OTA and sleep) |
+| `WeatherScreen`, `WeatherAnimation`, `WeatherLogic.h`, `WeatherAnimationLogic.h` | WEATHER page and its animated scene; pure, host-tested WMO mapping, day/night, formatting and particle motion |
 | `SystemAnimation`, `SystemAnimationLogic.h` | Boot, wake, Wi-Fi, restart, sleep and loading animations; pure, host-tested timelines |
 
 TFT drawing and JPEG decoding happen only on the Arduino loop task; the
@@ -289,6 +295,31 @@ the screen shows UPDATE COMPLETE / Restarting... just before the reboot. A
 failed upload shows the error, how far it got and that the current firmware
 is still installed, for 10 s, then returns to the previous page. At night the
 normal touch boost brightens the screen; no setting is changed.
+
+## Weather
+
+MORE > TIME / WEATHER is unchanged apart from a `FORECAST >` hint: tapping
+the weather block opens WEATHER (BACK returns). It shows the current
+temperature, condition and feels-like next to an animated scene; high, low,
+rain chance (this hour and today's maximum), humidity, wind and the next
+sunrise or sunset; and the next six hours (time, temperature, rain %). Units
+are Celsius and km/h like the rest of the dashboard.
+
+The backend extends its single cached Open-Meteo request (15 min) with
+`feels_like_c`, `humidity`, `wind_kmh`, `precip_mm`, `precip_probability`,
+`precip_probability_max` and `hourly` (up to 8 `{"h","t","p","c"}` entries
+from the current hour, selected per request from the cached 48-hour forecast).
+Every earlier key is unchanged; any new field may be missing.
+
+`firmware/include/WeatherLogic.h` is the one WMO-code mapping (clear, partly
+cloudy, cloudy, fog, drizzle, rain, heavy rain, thunderstorm, snow, unknown).
+Day or night comes from today's `sunrise_timestamp` / `sunset_timestamp`. The
+scene (sun with turning rays, moon with twinkling stars, drifting clouds,
+rain / drizzle / heavy rain, storm with lightning every 3-8 s, snow, fog)
+runs at 8 fps only while WEATHER is visible, inside its own 132x84 region;
+status updates redraw only text that changed, and the scene restarts only
+when the condition or day/night changes. Open-Meteo provides no severe-weather
+alerts, so there are none.
 
 ## System animations
 

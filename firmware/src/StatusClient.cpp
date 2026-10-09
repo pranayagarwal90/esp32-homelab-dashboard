@@ -14,6 +14,7 @@
 #include "CalendarScreen.h"
 #include "NetworkManager.h"
 #include "PageRouter.h"
+#include "WeatherScreen.h"
 
 static const unsigned long REFRESH_INTERVAL = 10000;
 static unsigned long lastRefresh = 0; // Main task only.
@@ -62,6 +63,32 @@ public:
   }
   uint8_t connected() override { return expired() ? 0 : WiFiClient::connected(); }
 };
+
+// Optional rich-weather fields; anything missing or malformed stays unknown.
+static void parseRichWeather(JsonVariantConst w, WeatherData& weather) {
+  auto tenths = [](JsonVariantConst v) -> int16_t {
+    return v.is<float>() ? toTenths(v.as<float>()) : WEATHER_NO_VALUE;
+  };
+  auto percent = [](JsonVariantConst v) -> int8_t {
+    return v.is<int>() && validPercent(v.as<int>()) ? (int8_t)v.as<int>() : -1;
+  };
+  weather.weatherCode = w["weather_code"].is<int>() ? (int16_t)w["weather_code"].as<int>() : -1;
+  weather.feelsLike10 = tenths(w["feels_like_c"]);
+  weather.wind10 = tenths(w["wind_kmh"]);
+  weather.humidity = percent(w["humidity"]);
+  weather.precipChance = percent(w["precip_probability"]);
+  weather.precipChanceMax = percent(w["precip_probability_max"]);
+  weather.hourlyCount = 0;
+  for (JsonVariantConst item : w["hourly"].as<JsonArrayConst>()) {
+    if (weather.hourlyCount >= WEATHER_HOURLY_MAX) break;
+    if (!item["h"].is<int>() || !validHour(item["h"].as<int>()) || !item["t"].is<float>()) continue;
+    HourlyForecast& slot = weather.hourly[weather.hourlyCount++];
+    slot.hour = (uint8_t)item["h"].as<int>();
+    slot.temp10 = toTenths(item["t"].as<float>());
+    slot.precip = percent(item["p"]);
+    slot.code = item["c"].is<int>() ? (int16_t)item["c"].as<int>() : -1;
+  }
+}
 
 // Runs on the status worker task. Must not touch AppState or the TFT.
 static StatusOutcome readStatus(const StatusRequest& request, StatusSnapshot& snapshot) {
@@ -213,6 +240,11 @@ static StatusOutcome readStatus(const StatusRequest& request, StatusSnapshot& sn
     weather.highC = doc["weather"]["high_c"] | 0.0;
     weather.lowC = doc["weather"]["low_c"] | 0.0;
     weather.weatherCondition = doc["weather"]["condition"].as<String>();
+    parseRichWeather(doc["weather"], weather);
+    weather.sunrise = snapshot.solar.sunrise;
+    weather.sunset = snapshot.solar.sunset;
+    weather.localMidnight = snapshot.solar.dayStart;
+    weather.observedAt = snapshot.solar.timestamp;
   }
 
   return StatusOutcome::Success;
@@ -263,7 +295,10 @@ static void applyStatusSnapshot(const StatusSnapshot& snapshot) {
   app.services = snapshot.services;
   app.time = snapshot.time;
   // Unavailable weather keeps the last known values for display.
-  if (snapshot.weather.weatherAvailable) app.weather = snapshot.weather;
+  if (snapshot.weather.weatherAvailable) {
+    app.weather = snapshot.weather;
+    app.weather.observedMs = millis();
+  }
   else app.weather.weatherAvailable = false;
   syncCalendarIfUnset(app.time.currentYear, app.time.currentMonth);
   app.serverOnline = true;
@@ -278,6 +313,11 @@ void processStatusResult() {
     bool alertsChanged = alertsOnStatus();
     // ALERTS redraws only when something it shows changed.
     bool redraw = app.currentPage != PAGE_ALERTS || alertsChanged || !wasOnline;
+    // WEATHER updates its text in place and keeps its animation running.
+    if (app.currentPage == PAGE_WEATHER) {
+      refreshWeatherPage();
+      redraw = false;
+    }
     // The stopwatch refreshes itself and shows no status.
     if (redraw && !isGamePlayPage(app.currentPage) && app.currentPage != PAGE_GAMES &&
         app.currentPage != PAGE_PHOTOS && app.currentPage != PAGE_SCREENSAVER &&

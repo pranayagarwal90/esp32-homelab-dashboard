@@ -14,6 +14,7 @@
 #include "SettingsScreen.h"
 #include "StopwatchScreen.h"
 #include "TimeWeatherScreen.h"
+#include "WeatherScreen.h"
 #include "games/MemoryGame.h"
 #include "games/ReactionGame.h"
 #include "games/SimonGame.h"
@@ -78,6 +79,10 @@ void handleTouch() {
   }
   if (app.currentPage == PAGE_GAMES) {
     handleGamesMenuTouch(x, y);
+    return;
+  }
+  if (app.currentPage == PAGE_WEATHER) {
+    handleWeatherTouch(x, y);
     return;
   }
   if (app.currentPage == PAGE_TIME) {
