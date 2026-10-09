@@ -8,6 +8,45 @@
 #include <stdio.h>
 #include <string.h>
 
+// MORE header "<  MORE 1/2  >": the targets follow the drawn arrows.
+static void testMorePaging() {
+  const int y = MORE_HEADER_TEXT_Y + 7;  // Middle of the size-2 text.
+  // The visible glyphs are inside their targets (">" was dead before: x 166-176).
+  assert(morePagingAt(MORE_PREV_X + 5, y) == MorePaging::Prev);
+  assert(morePagingAt(MORE_NEXT_X + 5, y) == MorePaging::Next);
+  assert(morePagingAt(171, y) == MorePaging::Next && morePagingAt(160, 10) == MorePaging::Next);
+  // Edges of each target.
+  assert(morePagingAt(0, 0) == MorePaging::Prev && morePagingAt(MORE_PREV_HIT_END - 1, MORE_HEADER_H - 1) == MorePaging::Prev);
+  assert(morePagingAt(MORE_PREV_HIT_END, y) == MorePaging::None);
+  assert(morePagingAt(MORE_NEXT_HIT_X - 1, y) == MorePaging::None);
+  assert(morePagingAt(MORE_NEXT_HIT_X, 0) == MorePaging::Next && morePagingAt(319, MORE_HEADER_H - 1) == MorePaging::Next);
+  assert(morePagingAt(300, 10) == MorePaging::Next);  // Over LIVE/OFFLINE (not a control).
+  assert(morePagingAt(20, MORE_HEADER_H) == MorePaging::None && morePagingAt(300, 60) == MorePaging::None);
+  assert(morePagingAt(-1, y) == MorePaging::None && morePagingAt(320, y) == MorePaging::None);
+  // The title is never a target.
+  for (int x = MORE_TITLE_X; x < MORE_TITLE_X + MORE_TITLE_CHARS * MORE_HEADER_CHAR_W; x++) {
+    assert(morePagingAt(x, y) == MorePaging::None);
+  }
+  // Comfortable resistive targets.
+  assert(MORE_PREV_HIT_END >= 40 && 320 - MORE_NEXT_HIT_X >= 160);
+  // "<  MORE 1/2  >" at x 10: the pieces sit exactly where the old string put them.
+  assert(MORE_TITLE_X == MORE_PREV_X + 3 * MORE_HEADER_CHAR_W);
+  assert(MORE_NEXT_X == MORE_PREV_X + 13 * MORE_HEADER_CHAR_W);
+
+  // Page steps: 1 -> 2 and back, always in range (the launcher wraps).
+  assert(moreStepPage(0, MorePaging::Next) == 1);
+  assert(moreStepPage(1, MorePaging::Prev) == 0);
+  assert(moreStepPage(0, MorePaging::Prev) == 1);  // No underflow.
+  assert(moreStepPage(1, MorePaging::Next) == 0);  // No overflow.
+  assert(moreStepPage(1, MorePaging::None) == 1);
+  assert(moreStepPage(7, MorePaging::Next) == 1 && moreStepPage(-3, MorePaging::Prev) == 1);
+  // A tap on the drawn ">" on page 1 shows page 2, whose "<" returns to page 1.
+  int page = moreStepPage(0, morePagingAt(MORE_NEXT_X + 5, y));
+  assert(page == 1 && moreAppAt(moreTileX(0) + 30, moreTileY(0) + 30, page) == MORE_APP_COUNT - 1);
+  assert(moreStepPage(page, morePagingAt(MORE_PREV_X + 5, y)) == 0);
+  assert(moreStepPage(page, morePagingAt(MORE_TITLE_X + 40, y)) == page);  // Title tap: no change.
+}
+
 static void testRootNav() {
   NavTab tab;
   assert(!rootNavAt(160, 204, tab)); // Above the bar.
@@ -111,8 +150,7 @@ static void testMore() {
   }
   // The ninth app (AI ASSISTANT) opens a second page, reached by header paging.
   assert(morePageCount() == 2);
-  assert(morePagingAt(20, 10) == MorePaging::Prev && morePagingAt(300, 10) == MorePaging::Next);
-  assert(morePagingAt(160, 10) == MorePaging::None && morePagingAt(300, 60) == MorePaging::None);
+  testMorePaging();
   // Tile centres map to their apps; gaps belong to a neighbour; bars excluded.
   for (int i = 0; i < MORE_APP_COUNT; i++) {
     int page = i / MORE_PER_PAGE, slot = i % MORE_PER_PAGE;
