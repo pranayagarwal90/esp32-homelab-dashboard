@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include "AlertsScreen.h"
+#include "AiAssistantScreen.h"
 #include "AlertManager.h"
 #include "Display.h"
 #include "PageRouter.h"
@@ -73,7 +74,9 @@ void drawAlertsPage() {
   char title[16];
   if (count) snprintf(title, sizeof(title), "ALERTS %d", count);
   else snprintf(title, sizeof(title), "ALERTS");
-  drawHeader(title);
+  // ASK AI takes the place of LIVE / OFFLINE here (stale data is an alert).
+  drawTitleBar(title);
+  drawAskAiHeaderButton();
 
   if (count == 0) {
     tft.setTextSize(2);
@@ -101,6 +104,10 @@ void drawAlertsPage() {
 }
 
 void handleAlertsTouch(int x, int y) {
+  if (aiAskHeaderHit(x, y)) {
+    openAiResult(AiMode::Alerts, PAGE_ALERTS);
+    return;
+  }
   int count = alertsActiveCount(alerts());
   switch (alertsBarAt(x, y)) {
     case AlertsBarHit::Prev:

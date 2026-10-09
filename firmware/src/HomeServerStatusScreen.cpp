@@ -2,6 +2,7 @@
 #include "HomeServerStatusScreen.h"
 #include "AppState.h"
 #include "AlertLogic.h"
+#include "AiAssistantScreen.h"
 #include "AlertsScreen.h"
 #include "Display.h"
 #include "PageRouter.h"
@@ -151,10 +152,11 @@ void drawHomeServerPage() {
   tft.setCursor(105, 194);
   tft.printf("RX %.2f  TX %.2f Mbps", metrics.wifiRxMbps, metrics.wifiTxMbps);
 
-  drawBackBar(nullptr, "BACK", nullptr);
+  drawBackBar(nullptr, "BACK", "ASK AI");
 }
 
 void handleHomeServerTouch(int x, int y) {
-  if (y >= NAV_Y) showPage(appBackTarget(PAGE_HOMESERVER, PAGE_MORE));
+  if (aiAskBarHit(x, y)) openAiResult(AiMode::Attention, PAGE_HOMESERVER);
+  else if (y >= NAV_Y) showPage(appBackTarget(PAGE_HOMESERVER, PAGE_MORE));
   else if (alertBadgeHit(x, y)) openAlerts(PAGE_HOMESERVER);
 }

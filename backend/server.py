@@ -1,4 +1,4 @@
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from http.client import HTTPConnection, HTTPSConnection
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, time as datetime_time, timedelta
@@ -10,6 +10,8 @@ import json
 import os
 import subprocess
 import time
+
+from ai_assistant import AiAssistant, RequestError
 
 BASE_DIR = Path(__file__).resolve().parent
 PHOTOS_DIR = BASE_DIR / "photos-ready"
@@ -563,6 +565,10 @@ def get_status():
     }
 
 
+# Read-only AI explanations from local Ollama; context from get_status().
+AI = AiAssistant(lambda: get_status())
+
+
 class Handler(BaseHTTPRequestHandler):
     def send_json(self, payload, status=200):
         body = json.dumps(payload).encode()
@@ -576,6 +582,10 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/api/status":
             self.send_json(get_status())
+            return
+
+        if self.path == "/api/ai/status":
+            self.send_json(AI.status())
             return
 
         if self.path == "/api/photos":
@@ -605,13 +615,36 @@ class Handler(BaseHTTPRequestHandler):
 
         self.send_error(404)
 
+    def do_POST(self):
+        if self.path != "/api/ai/explain":
+            self.send_error(404)
+            return
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            length = -1
+        if length < 0 or length > 2048:
+            self.send_json({"available": False, "error": "invalid request"}, 400)
+            return
+        try:
+            mode, refresh, alerts = AI.parse_request(self.rfile.read(length))
+        except RequestError as error:
+            self.send_json({"available": False, "error": "invalid request: " + str(error)}, 400)
+            return
+        self.send_json(AI.explain(mode, refresh, alerts))
+
     def log_message(self, format, *args):
         pass
 
 
-server = HTTPServer(("0.0.0.0", 8090), Handler)
-print("Homelab Dashboard API")
-print("Listening on 0.0.0.0:8090")
-print("Windows metrics:", WINDOWS_METRICS_URL)
-print("Endpoints: /api/status, /api/photos, /photos/<file>")
-server.serve_forever()
+if __name__ == "__main__":
+    # Threaded: a slow AI request never holds up /api/status.
+    server = ThreadingHTTPServer(("0.0.0.0", 8090), Handler)
+    server.daemon_threads = True
+    print("Homelab Dashboard API")
+    print("Listening on 0.0.0.0:8090")
+    print("Windows metrics:", WINDOWS_METRICS_URL)
+    print("AI primary:", f"{AI.primary.model} (configured)" if AI.primary else "not configured")
+    print("AI fallback:", AI.fallback.model)
+    print("Endpoints: /api/status, /api/photos, /photos/<file>, /api/ai/status, POST /api/ai/explain")
+    server.serve_forever()

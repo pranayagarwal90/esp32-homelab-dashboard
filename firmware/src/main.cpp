@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include <TFT_eSPI.h>
+#include "AiAssistantScreen.h"
 #include "AppState.h"
 #include "BacklightPwm.h"
 #include "BluetoothControl.h"
@@ -23,7 +24,7 @@
 #include "games/SnakeGame.h"
 
 // All TFT drawing and JPEG decoding happen on this (the Arduino loop) task.
-// The status and photo workers only do network I/O and never draw.
+// The status, photo and AI workers only do network I/O and never draw.
 TFT_eSPI tft = TFT_eSPI();
 
 void setup() {
@@ -65,6 +66,7 @@ void loop() {
   updateWeatherPage();
   updateScreensaver();
   updatePhotos();
+  updateAiAssistant();
   updateSettings();
   processStatusResult();
   updateBacklight();

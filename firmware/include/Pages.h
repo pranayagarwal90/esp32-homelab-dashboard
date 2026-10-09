@@ -23,7 +23,9 @@ enum Page {
   PAGE_MEMORY,
   PAGE_SIMON,
   PAGE_WEATHER,
-  PAGE_HOMESERVER     // Detailed host metrics (the former HOME).
+  PAGE_HOMESERVER,    // Detailed host metrics (the former HOME).
+  PAGE_AI,            // AI ASSISTANT menu (MORE).
+  PAGE_AI_RESULT      // One AI answer (from the menu, ALERTS or HOMESERVER).
 };
 
 // Games in play own the screen: no status fetches and no status redraws.
@@ -62,6 +64,7 @@ inline NavTab navTabForPage(Page page) {
 
 // Where BACK leads from a page. Alerts and Weather can be opened from more than
 // one place and return to their origin (HOME, MORE, Clocks, HomeServer);
+// an AI answer to ALERTS, HOMESERVER or the AI menu;
 // games return to GAMES; other apps to MORE. Stopwatch returns to Settings
 // (Utilities) and is handled by the Settings module.
 inline Page appBackTarget(Page page, Page origin) {
@@ -77,6 +80,9 @@ inline Page appBackTarget(Page page, Page origin) {
       return PAGE_GAMES;
     case PAGE_STOPWATCH:
       return PAGE_SETTINGS;
+    // An AI answer returns to where it was asked: ALERTS, HOMESERVER or the menu.
+    case PAGE_AI_RESULT:
+      return origin == PAGE_ALERTS || origin == PAGE_HOMESERVER ? origin : PAGE_AI;
     default:
       return PAGE_MORE;
   }

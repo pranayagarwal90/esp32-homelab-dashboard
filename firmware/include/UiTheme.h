@@ -13,6 +13,7 @@ constexpr uint16_t Orange = 0xFC60;
 constexpr uint16_t Red = 0xF1E7;
 constexpr uint16_t Purple = 0xA27F;
 constexpr uint16_t Teal = 0x04F1;
+constexpr uint16_t Indigo = 0x5A3F;   // AI.
 constexpr uint16_t White = 0xFFFF;
 constexpr uint16_t Black = 0x0000;
 constexpr uint16_t NavBar = 0x18E3;     // Bottom navigation background.

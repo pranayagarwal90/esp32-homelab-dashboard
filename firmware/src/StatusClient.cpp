@@ -334,17 +334,20 @@ void processStatusResult() {
     }
     // MORE and SETTINGS show no status data apart from LIVE / OFFLINE.
     if ((app.currentPage == PAGE_MORE || app.currentPage == PAGE_SETTINGS) && wasOnline) redraw = false;
-    // The stopwatch refreshes itself and shows no status.
+    // The stopwatch refreshes itself and shows no status; the AI pages show
+    // an answer for the status at the time it was asked.
     if (redraw && !isGamePlayPage(app.currentPage) && app.currentPage != PAGE_GAMES &&
         app.currentPage != PAGE_PHOTOS && app.currentPage != PAGE_SCREENSAVER &&
-        app.currentPage != PAGE_STOPWATCH) drawCurrentPage();
+        app.currentPage != PAGE_STOPWATCH && app.currentPage != PAGE_AI &&
+        app.currentPage != PAGE_AI_RESULT) drawCurrentPage();
   } else {
     bool alertsChanged = alertsOnFetchFailed();
     bool redrawn = false;
     if (result.outcome == StatusOutcome::ReconnectFailed || result.outcome == StatusOutcome::HttpFailed) {
       app.serverOnline = false;
       if (result.outcome == StatusOutcome::ReconnectFailed && app.currentPage != PAGE_SCREENSAVER &&
-          !isGamePlayPage(app.currentPage) && app.currentPage != PAGE_STOPWATCH) {
+          !isGamePlayPage(app.currentPage) && app.currentPage != PAGE_STOPWATCH &&
+          app.currentPage != PAGE_AI && app.currentPage != PAGE_AI_RESULT) {
         drawCurrentPage();
         redrawn = true;
       }
