@@ -492,26 +492,7 @@ static void testSimonLayout() {
 
 // --- Navigation ------------------------------------------------------------------------
 
-static void testMoreMenu() {
-  // Each drawn button's centre maps to its item.
-  struct { int x, y; MoreItem item; } cases[] = {
-    {85, 60, MoreItem::Time}, {235, 60, MoreItem::Calendar},
-    {85, 100, MoreItem::Games}, {235, 100, MoreItem::Photos},
-    {85, 140, MoreItem::Alerts}, {235, 140, MoreItem::Settings},
-    {85, 180, MoreItem::Tools}, {235, 180, MoreItem::Tools},
-  };
-  for (const auto& c : cases) assert(moreItemAt(c.x, c.y) == c.item);
-  // Band edges: contiguous rows, header and nav bar excluded.
-  assert(moreItemAt(85, 39) == MoreItem::None);
-  assert(moreItemAt(85, 40) == MoreItem::Time && moreItemAt(85, 79) == MoreItem::Time);
-  assert(moreItemAt(85, 80) == MoreItem::Games);
-  assert(moreItemAt(85, 200) == MoreItem::Tools);
-  assert(moreItemAt(85, 205) == MoreItem::None && moreItemAt(85, 230) == MoreItem::None);
-  // Buttons fit above the nav bar with a gap between rows.
-  assert(MORE_Y0 + 3 * MORE_PITCH + MORE_H <= 205 && MORE_PITCH > MORE_H);
-}
-
-static void testGamesAndToolsMenus() {
+static void testGamesMenu() {
   assert(gamesItemAt(85, 66) == MenuNode::TicTacToe);
   assert(gamesItemAt(235, 66) == MenuNode::Reaction);
   assert(gamesItemAt(85, 118) == MenuNode::Snake);
@@ -520,22 +501,16 @@ static void testGamesAndToolsMenus() {
   assert(gamesItemAt(160, 20) == MenuNode::None && gamesItemAt(160, 220) == MenuNode::None);
   // All five games on one page with the same 44 px buttons as MORE had: no paging.
   assert(GAMES_Y[2] + GAMES_H <= 205 && GAMES_H >= 44);
-
-  assert(toolsItemAt(160, TOOLS_Y + TOOLS_H / 2) == MenuNode::Stopwatch);
-  assert(toolsItemAt(160, 150) == MenuNode::None && toolsItemAt(160, 20) == MenuNode::None);
 }
 
 static void testBackNavigation() {
-  assert(menuParent(MenuNode::Stopwatch) == MenuNode::Tools);
-  assert(menuParent(MenuNode::Tools) == MenuNode::More);
-  assert(menuParent(MenuNode::Games) == MenuNode::More);
+  assert(menuParent(MenuNode::Games) == MenuNode::More); // GAMES -> MORE.
   const MenuNode games[] = {MenuNode::TicTacToe, MenuNode::Reaction, MenuNode::Snake, MenuNode::Memory,
                             MenuNode::Simon};
   for (MenuNode game : games) {
     assert(menuParent(game) == MenuNode::Games);
     assert(menuParent(menuParent(game)) == MenuNode::More); // Game -> GAMES -> MORE.
   }
-  assert(menuParent(menuParent(MenuNode::Stopwatch)) == MenuNode::More);
   assert(menuParent(MenuNode::More) == MenuNode::More);
 }
 
@@ -557,8 +532,7 @@ int main() {
   testSimonMaxAndSpeed();
   testSimonSuspendAndRollover();
   testSimonLayout();
-  testMoreMenu();
-  testGamesAndToolsMenus();
+  testGamesMenu();
   testBackNavigation();
   puts("Game tests passed: snake, memory, simon, navigation");
 }

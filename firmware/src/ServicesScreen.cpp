@@ -2,7 +2,10 @@
 #include "ServicesScreen.h"
 #include "AppState.h"
 #include "Display.h"
+#include "PageRouter.h"
+#include "ServicesLogic.h"
 #include "UiHelpers.h"
+#include "UiTheme.h"
 
 static String shortName(String name) {
   if (name.length() > 24) return name.substring(0, 21) + "...";
@@ -41,16 +44,12 @@ void drawDockerPage() {
   drawNavigation();
 }
 
-static void drawServiceRow(const char* name, bool running, int y) {
-  uint16_t color = running ? TFT_GREEN : TFT_RED;
-  tft.fillCircle(18, y + 5, 5, color);
-  tft.setTextSize(1);
-  tft.setTextColor(TFT_WHITE, TFT_BLACK);
-  tft.setCursor(32, y);
-  tft.print(name);
-  tft.setCursor(250, y);
-  tft.setTextColor(color, TFT_BLACK);
-  tft.print(running ? "ONLINE" : "OFFLINE");
+static uint16_t dotColor(ServiceDot dot) {
+  switch (dot) {
+    case ServiceDot::Online: return UiColor::Green;
+    case ServiceDot::Offline: return UiColor::Red;
+    default: return UiColor::Grey;
+  }
 }
 
 void drawServicesPage() {
@@ -58,15 +57,18 @@ void drawServicesPage() {
   app.currentPage = PAGE_SERVICES;
   tft.fillScreen(TFT_BLACK);
   drawHeader("SERVICES");
+  for (int id = 0; id < SVC_COUNT; id++) {
+    int y = SERVICES_Y0 + id * SERVICES_PITCH;
+    ServiceDot dot = serviceDot(services.reported, services.online, id);
+    tft.fillCircle(22, y + 7, 5, dotColor(dot));
+    tft.setTextSize(2);
+    tft.setTextColor(dot == ServiceDot::Unknown ? TFT_DARKGREY : TFT_WHITE, TFT_BLACK);
+    tft.setCursor(38, y);
+    tft.print(SERVICE_LIST[id].label);
+  }
+  drawBackBar(nullptr, "BACK", nullptr);
+}
 
-  int y = 48;
-  drawServiceRow("Jellyfin", services.serviceJellyfin, y); y += 22;
-  drawServiceRow("Navidrome", services.serviceNavidrome, y); y += 22;
-  drawServiceRow("Ollama", services.serviceOllama, y); y += 22;
-  drawServiceRow("Cloudfare", services.serviceCloudflare, y); y += 22;
-  drawServiceRow("NextCloud", services.serviceNextcloud, y); y += 22;
-  drawServiceRow("Immich", services.serviceImmich, y); y += 22;
-  drawServiceRow("Technical Blog", services.serviceTechnicalBlog, y);
-
-  drawNavigation();
+void handleServicesTouch(int, int y) {
+  if (y >= NAV_Y) showPage(appBackTarget(PAGE_SERVICES, PAGE_MORE));
 }

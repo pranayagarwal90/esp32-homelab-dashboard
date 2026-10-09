@@ -12,6 +12,8 @@
 #include "SettingsStore.h"
 #include "SettingsUi.h"
 #include "UiHelpers.h"
+#include "MenuLayout.h"
+#include "UiIcons.h"
 #include "NetworkManager.h"
 #include "WifiProvisioning.h"
 #include "WifiSettingsScreen.h"
@@ -86,14 +88,18 @@ void drawInfoLine(int y, const char* label, const char* value) {
 
 // --- List menus (root and categories) -------------------------------------------------
 
-static void drawListRow(int row, const char* label) {
+// [icon tile]  LABEL                    >
+static void drawListRow(int row, const SettingsMenuEntry& entry) {
   int y = SETTINGS_LIST_Y0 + row * SETTINGS_LIST_PITCH;
   tft.fillRoundRect(SETTINGS_LIST_X, y, SETTINGS_LIST_W, SETTINGS_LIST_H, 8, TFT_DARKGREY);
   tft.drawRoundRect(SETTINGS_LIST_X, y, SETTINGS_LIST_W, SETTINGS_LIST_H, 8, TFT_LIGHTGREY);
+  int tileX = SETTINGS_LIST_X + 5, tileY = y + (SETTINGS_LIST_H - 28) / 2;
+  tft.fillRoundRect(tileX, tileY, 28, 28, 6, entry.tile);
+  drawUiIcon(entry.icon, tileX + 4, tileY + 4, 20, glyphColorOn(entry.tile), UiColor::Yellow, entry.tile);
   tft.setTextSize(2);
   tft.setTextColor(TFT_WHITE, TFT_DARKGREY);
-  tft.setCursor(SETTINGS_LIST_X + 12, y + 11);
-  tft.print(label);
+  tft.setCursor(SETTINGS_LIST_X + 42, y + 11);
+  tft.print(entry.label);
   tft.setTextColor(TFT_LIGHTGREY, TFT_DARKGREY);
   tft.setCursor(SETTINGS_LIST_X + SETTINGS_LIST_W - 22, y + 11);
   tft.print(">");
@@ -102,8 +108,10 @@ static void drawListRow(int row, const char* label) {
 static void drawSettingsList(const SettingsMenu& menu) {
   tft.fillScreen(TFT_BLACK);
   drawHeader(menu.title);
-  for (int row = 0; row < menu.count; row++) drawListRow(row, menu.entries[row].label);
-  drawBackBar(nullptr, "BACK", nullptr);
+  for (int row = 0; row < menu.count; row++) drawListRow(row, menu.entries[row]);
+  // The root is a bottom-nav destination; categories go back one level.
+  if (settingsBottomIsNav(view)) drawNavigation();
+  else drawBackBar(nullptr, "BACK", nullptr);
 }
 
 static void handleListTouch(const SettingsMenu& menu, int x, int y) {
@@ -111,6 +119,7 @@ static void handleListTouch(const SettingsMenu& menu, int x, int y) {
   if (row < 0) return;
   const SettingsMenuEntry& entry = menu.entries[row];
   if (entry.confirm != ConfirmAction::None) askConfirm(entry.confirm, view);
+  else if (entry.target == SettingsView::Stopwatch) showPage(PAGE_STOPWATCH); // Utilities stays current.
   else showSettingsView(entry.target);
 }
 
@@ -308,7 +317,11 @@ void askConfirm(ConfirmAction action, SettingsView returnTo) {
 // --- Routing ------------------------------------------------------------------------
 
 void openSettings() {
-  view = SettingsView::Root;
+  openSettingsAt(SettingsView::Root);
+}
+
+void openSettingsAt(SettingsView at) {
+  view = at;
   showPage(PAGE_SETTINGS);
 }
 
@@ -344,8 +357,7 @@ void drawSettingsPage() {
 
 static void goBack() {
   flushSettings();
-  if (settingsBackLeaves(view)) showPage(PAGE_MORE);
-  else showSettingsView(settingsParent(view));
+  showSettingsView(settingsParent(view));
 }
 
 void handleSettingsTouch(int x, int y) {
@@ -359,7 +371,13 @@ void handleSettingsTouch(int x, int y) {
     default: break;
   }
   if (y >= BACK_BAR_Y) {
-    goBack();
+    NavTab tab;
+    if (settingsBottomIsNav(view) && rootNavAt(x, y, tab)) {
+      flushSettings();
+      showRootTab(tab);
+    } else {
+      goBack();
+    }
     return;
   }
   switch (view) {

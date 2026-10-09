@@ -14,6 +14,7 @@ static constexpr int HOURLY_W = 52;
 static uint32_t drawnTextHash = 0;
 static WeatherScene shownScene = WeatherScene::Neutral;
 static bool shownOnline = false;
+static Page weatherOrigin = PAGE_MORE;
 
 static uint32_t nowEpoch() {
   const WeatherData& w = app.weather;
@@ -198,8 +199,13 @@ void refreshWeatherPage() {
   }
 }
 
+void openWeather(Page origin) {
+  weatherOrigin = origin;
+  showPage(PAGE_WEATHER);
+}
+
 void handleWeatherTouch(int x, int y) {
-  if (weatherHitAt(x, y) == WeatherHit::Back) showPage(PAGE_TIME);
+  if (weatherHitAt(x, y) == WeatherHit::Back) showPage(appBackTarget(PAGE_WEATHER, weatherOrigin));
 }
 
 void updateWeatherPage() {

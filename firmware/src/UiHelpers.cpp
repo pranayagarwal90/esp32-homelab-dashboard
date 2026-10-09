@@ -1,6 +1,8 @@
 #include "UiHelpers.h"
 #include "AppState.h"
 #include "Display.h"
+#include "UiIcons.h"
+#include "UiTheme.h"
 
 void drawHeader(const char* title) {
   tft.fillRect(0, 0, 320, 36, TFT_DARKGREY);
@@ -39,25 +41,26 @@ void drawTitleBarValue(const char* right) {
 
 void drawNavigation() {
   tft.drawFastHLine(0, 207, 320, TFT_DARKGREY);
-
   struct NavItem {
-    int x;
-    int w;
+    int x, w;
     const char* label;
-    Page page;
+    UiIcon icon;
+    NavTab tab;
   } items[] = {
-    {0,   107, "HOME",     PAGE_HOME},
-    {107, 107, "SERVICES", PAGE_SERVICES},
-    {214, 106, "MORE",     PAGE_MORE}
+    {0, NAV_SPLIT_1, "HOME", UiIcon::Home, NavTab::Home},
+    {NAV_SPLIT_1, NAV_SPLIT_2 - NAV_SPLIT_1, "MORE", UiIcon::More, NavTab::More},
+    {NAV_SPLIT_2, 320 - NAV_SPLIT_2, "SETTINGS", UiIcon::Settings, NavTab::Settings},
   };
-
-  for (auto &item : items) {
-    uint16_t color = app.currentPage == item.page ? TFT_BLUE : TFT_DARKGREY;
-    tft.fillRect(item.x, 208, item.w, 32, color);
+  NavTab active = navTabForPage(app.currentPage);
+  for (const NavItem& item : items) {
+    bool on = item.tab == active;
+    uint16_t iconColor = on ? UiColor::NavActive : UiColor::NavIdle;
+    tft.fillRect(item.x, 208, item.w, 32, UiColor::NavBar);
+    if (on) tft.fillRect(item.x + item.w / 2 - 14, 208, 28, 2, UiColor::NavActive);
+    drawUiIcon(item.icon, item.x + (item.w - 16) / 2, 211, 16, iconColor, iconColor, UiColor::NavBar);
     tft.setTextSize(1);
-    tft.setTextColor(TFT_WHITE, color);
-    int textW = tft.textWidth(item.label);
-    tft.setCursor(item.x + (item.w - textW) / 2, 220);
+    tft.setTextColor(on ? TFT_WHITE : UiColor::NavIdle, UiColor::NavBar);
+    tft.setCursor(item.x + (item.w - tft.textWidth(item.label)) / 2, 230);
     tft.print(item.label);
   }
 }

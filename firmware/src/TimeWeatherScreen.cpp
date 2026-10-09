@@ -4,6 +4,7 @@
 #include "Display.h"
 #include "PageRouter.h"
 #include "UiHelpers.h"
+#include "WeatherScreen.h"
 
 static void drawTimeRow(const char* label, const String &timeValue, int y) {
   tft.setTextSize(1);
@@ -66,6 +67,6 @@ void drawTimePage() {
 }
 
 void handleTimeTouch(int x, int y) {
-  if (y >= 205) showPage(PAGE_MORE);
-  else if (timeWeatherBlockHit(x, y)) showPage(PAGE_WEATHER);
+  if (y >= 205) showPage(appBackTarget(PAGE_TIME, PAGE_MORE));
+  else if (timeWeatherBlockHit(x, y)) openWeather(PAGE_TIME);
 }

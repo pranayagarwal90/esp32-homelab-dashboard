@@ -2,6 +2,7 @@
 #include "AlertsScreen.h"
 #include "CalendarScreen.h"
 #include "HomeScreen.h"
+#include "HomeServerStatusScreen.h"
 #include "MenuScreens.h"
 #include "PhotoScreen.h"
 #include "Screensaver.h"
@@ -31,16 +32,24 @@ void drawCurrentPage() {
     case PAGE_SCREENSAVER: drawScreensaverClock(); break;
     case PAGE_SETTINGS: drawSettingsPage(); break;
     case PAGE_ALERTS: drawAlertsPage(); break;
-    case PAGE_TOOLS: drawToolsPage(); break;
     case PAGE_STOPWATCH: drawStopwatchPage(); break;
     case PAGE_SNAKE: drawSnakePage(); break;
     case PAGE_MEMORY: drawMemoryPage(); break;
     case PAGE_SIMON: drawSimonPage(); break;
     case PAGE_WEATHER: drawWeatherPage(); break;
+    case PAGE_HOMESERVER: drawHomeServerPage(); break;
   }
 }
 
 void showPage(Page page) {
   app.currentPage = page;
   drawCurrentPage();
+}
+
+void showRootTab(NavTab tab) {
+  switch (tab) {
+    case NavTab::Home: showPage(PAGE_HOME); break;
+    case NavTab::More: showPage(PAGE_MORE); break;
+    case NavTab::Settings: openSettings(); break;
+  }
 }

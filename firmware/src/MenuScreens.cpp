@@ -7,6 +7,8 @@
 #include "PageRouter.h"
 #include "SettingsScreen.h"
 #include "UiHelpers.h"
+#include "UiIcons.h"
+#include "WeatherScreen.h"
 #include "games/TicTacToe.h"
 
 static constexpr int LEFT_X = 15;
@@ -14,23 +16,37 @@ static constexpr int RIGHT_X = 165;
 static constexpr int HALF_W = 140;
 static constexpr int FULL_W = 290;
 
+static int morePage = 0;
+
+static void drawMoreTile(int index, int slot) {
+  const MoreApp& app_ = MORE_APPS[index];
+  int x = moreTileX(slot % MORE_COLS), y = moreTileY(slot / MORE_COLS);
+  int boxX = x + (MORE_TILE_W - MORE_ICON_BOX) / 2, boxY = y + 6;
+  tft.fillRoundRect(boxX, boxY, MORE_ICON_BOX, MORE_ICON_BOX, 10, app_.tile);
+  int inset = (MORE_ICON_BOX - MORE_ICON) / 2;
+  drawUiIcon(app_.icon, boxX + inset, boxY + inset, MORE_ICON, glyphColorOn(app_.tile), app_.accent, app_.tile);
+  tft.setTextSize(1);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  tft.setCursor(x + (MORE_TILE_W - tft.textWidth(app_.label)) / 2, y + MORE_ICON_BOX + 14);
+  tft.print(app_.label);
+}
+
 void drawMorePage() {
   app.currentPage = PAGE_MORE;
+  int pages = morePageCount();
+  if (morePage >= pages) morePage = 0;
   tft.fillScreen(TFT_BLACK);
-  drawHeader("MORE");
-
-  static const char* const LABELS[3][2] = {
-    {"TIME / WEATHER", "CALENDAR"},
-    {"GAMES", "PHOTOS"},
-    {"ALERTS", "SETTINGS"},
-  };
-  for (int row = 0; row < 3; row++) {
-    int y = MORE_Y0 + row * MORE_PITCH;
-    drawMenuButton(LEFT_X, y, HALF_W, MORE_H, LABELS[row][0]);
-    drawMenuButton(RIGHT_X, y, HALF_W, MORE_H, LABELS[row][1]);
+  if (pages > 1) {
+    char title[16];
+    snprintf(title, sizeof(title), "<  MORE %d/%d  >", morePage + 1, pages);
+    drawHeader(title);
+  } else {
+    drawHeader("MORE");
   }
-  drawMenuButton(LEFT_X, MORE_Y0 + 3 * MORE_PITCH, FULL_W, MORE_H, "TOOLS");
-
+  for (int slot = 0; slot < MORE_PER_PAGE; slot++) {
+    int index = morePage * MORE_PER_PAGE + slot;
+    if (index < MORE_APP_COUNT) drawMoreTile(index, slot);
+  }
   drawNavigation();
 }
 
@@ -46,19 +62,9 @@ void drawGamesPage() {
   drawBackBar(nullptr, "BACK", nullptr);
 }
 
-void drawToolsPage() {
-  app.currentPage = PAGE_TOOLS;
-  tft.fillScreen(TFT_BLACK);
-  drawHeader("TOOLS");
-  drawMenuButton(25, TOOLS_Y, 270, TOOLS_H, "STOPWATCH");
-  drawBackBar(nullptr, "BACK", nullptr);
-}
-
 void showMenuNode(MenuNode node) {
   switch (node) {
     case MenuNode::More: showPage(PAGE_MORE); break;
-    case MenuNode::Tools: showPage(PAGE_TOOLS); break;
-    case MenuNode::Stopwatch: showPage(PAGE_STOPWATCH); break;
     case MenuNode::Games: showPage(PAGE_GAMES); break;
     case MenuNode::TicTacToe:
       resetTTT();
@@ -72,29 +78,37 @@ void showMenuNode(MenuNode node) {
   }
 }
 
-bool handleMoreTouch(int x, int y) {
-  switch (moreItemAt(x, y)) {
-    case MoreItem::Time: showPage(PAGE_TIME); return true;
-    case MoreItem::Calendar:
+static void openMoreApp(Page page) {
+  switch (page) {
+    case PAGE_ALERTS: openAlerts(PAGE_MORE); break;
+    case PAGE_WEATHER: openWeather(PAGE_MORE); break;
+    case PAGE_CALENDAR:
       setCalendarMonth(app.time.currentYear, app.time.currentMonth);
       showPage(PAGE_CALENDAR);
-      return true;
-    case MoreItem::Games: showMenuNode(MenuNode::Games); return true;
-    case MoreItem::Photos: showPage(PAGE_PHOTOS); return true;
-    case MoreItem::Alerts: openAlerts(PAGE_MORE); return true;
-    case MoreItem::Settings: openSettings(); return true;
-    case MoreItem::Tools: showMenuNode(MenuNode::Tools); return true;
-    case MoreItem::None: return false;
+      break;
+    default: showPage(page); break;
   }
-  return false;
+}
+
+bool handleMoreTouch(int x, int y) {
+  switch (morePagingAt(x, y)) {
+    case MorePaging::Prev:
+      morePage = (morePage + morePageCount() - 1) % morePageCount();
+      drawMorePage();
+      return true;
+    case MorePaging::Next:
+      morePage = (morePage + 1) % morePageCount();
+      drawMorePage();
+      return true;
+    case MorePaging::None: break;
+  }
+  int index = moreAppAt(x, y, morePage);
+  if (index < 0) return false;
+  openMoreApp(MORE_APPS[index].page);
+  return true;
 }
 
 void handleGamesMenuTouch(int x, int y) {
-  if (y >= 205) showMenuNode(menuParent(MenuNode::Games));
+  if (y >= NAV_Y) showMenuNode(menuParent(MenuNode::Games));
   else showMenuNode(gamesItemAt(x, y));
-}
-
-void handleToolsMenuTouch(int x, int y) {
-  if (y >= 205) showMenuNode(menuParent(MenuNode::Tools));
-  else showMenuNode(toolsItemAt(x, y));
 }

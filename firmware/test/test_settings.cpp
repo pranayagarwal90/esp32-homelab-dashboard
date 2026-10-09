@@ -136,12 +136,22 @@ static const SettingsMenuEntry& tapRow(SettingsView view, int row) {
 
 static void testHierarchy() {
   SettingsMenu menu;
-  // Root: SYSTEM / CONNECTIVITY / DISPLAY.
-  assert(settingsMenuFor(SettingsView::Root, menu) && menu.count == 3);
+  // Root: SYSTEM / CONNECTIVITY / DISPLAY / UTILITIES.
+  assert(settingsMenuFor(SettingsView::Root, menu) && menu.count == 4);
   assert(strcmp(menu.title, "SETTINGS") == 0);
   assert(tapRow(SettingsView::Root, 0).target == SettingsView::System);
   assert(tapRow(SettingsView::Root, 1).target == SettingsView::Connectivity);
   assert(tapRow(SettingsView::Root, 2).target == SettingsView::DisplayMenu);
+  assert(tapRow(SettingsView::Root, 3).target == SettingsView::Utilities);
+  // Four root rows still fit above the bottom navigation.
+  assert(menu.count <= SETTINGS_LIST_MAX_ROWS);
+
+  // UTILITIES: Stopwatch (its own page; BACK returns to UTILITIES).
+  assert(settingsMenuFor(SettingsView::Utilities, menu) && menu.count == 1);
+  assert(strcmp(menu.title, "UTILITIES") == 0);
+  assert(tapRow(SettingsView::Utilities, 0).target == SettingsView::Stopwatch);
+  assert(tapRow(SettingsView::Utilities, 0).icon == UiIcon::Stopwatch);
+  assert(!settingsMenuFor(SettingsView::Stopwatch, menu));
 
   // List hit-testing: gaps, margins, missing rows and the BACK bar are inert.
   assert(settingsListRowAt(160, SETTINGS_LIST_Y0 + SETTINGS_LIST_H + 2, 3) == -1); // Gap.
@@ -175,7 +185,8 @@ static void testHierarchy() {
   assert(!settingsMenuFor(SettingsView::Wifi, menu));
   assert(!settingsMenuFor(SettingsView::Build, menu));
 
-  // BACK: feature -> category -> root -> MORE.
+  // BACK: feature -> category -> root; the root has no BACK (SETTINGS is a
+  // bottom-nav tab, its bottom bar is the navigation).
   assert(settingsParent(SettingsView::Info) == SettingsView::System);
   assert(settingsParent(SettingsView::Build) == SettingsView::System);
   assert(settingsParent(SettingsView::Wifi) == SettingsView::Connectivity);
@@ -187,16 +198,46 @@ static void testHierarchy() {
   assert(settingsParent(SettingsView::System) == SettingsView::Root);
   assert(settingsParent(SettingsView::Connectivity) == SettingsView::Root);
   assert(settingsParent(SettingsView::DisplayMenu) == SettingsView::Root);
-  assert(settingsBackLeaves(SettingsView::Root));
-  assert(!settingsBackLeaves(SettingsView::System));
-  assert(!settingsBackLeaves(SettingsView::Brightness));
+  assert(settingsParent(SettingsView::Utilities) == SettingsView::Root);
+  assert(settingsParent(SettingsView::Stopwatch) == SettingsView::Utilities);
+  assert(settingsBottomIsNav(SettingsView::Root));
+  const SettingsView others[] = {SettingsView::System, SettingsView::Connectivity, SettingsView::DisplayMenu,
+                                 SettingsView::Utilities, SettingsView::Brightness, SettingsView::Build,
+                                 SettingsView::Wifi, SettingsView::Info};
+  for (SettingsView v : others) assert(!settingsBottomIsNav(v));
   SettingsView view = SettingsView::Wallpaper;
   int levels = 0;
-  while (!settingsBackLeaves(view)) {
+  while (!settingsBottomIsNav(view)) {
     view = settingsParent(view);
     levels++;
   }
-  assert(levels == 2); // Wallpaper -> DISPLAY -> SETTINGS, then MORE.
+  assert(levels == 2); // Wallpaper -> DISPLAY -> SETTINGS (root; no further BACK).
+  view = SettingsView::Stopwatch;
+  for (levels = 0; !settingsBottomIsNav(view); levels++) view = settingsParent(view);
+  assert(levels == 2); // Stopwatch -> UTILITIES -> SETTINGS.
+
+  // Every list entry has an icon and a tile colour.
+  const SettingsView lists[] = {SettingsView::Root, SettingsView::System, SettingsView::Connectivity,
+                                SettingsView::DisplayMenu, SettingsView::Utilities};
+  for (SettingsView v : lists) {
+    assert(settingsMenuFor(v, menu));
+    for (int i = 0; i < menu.count; i++) {
+      assert(menu.entries[i].icon < UiIcon::Count && menu.entries[i].tile != 0);
+    }
+  }
+  assert(tapRow(SettingsView::Root, 0).icon == UiIcon::System);
+  assert(tapRow(SettingsView::Root, 1).icon == UiIcon::Connectivity);
+  assert(tapRow(SettingsView::Root, 2).icon == UiIcon::Display);
+  assert(tapRow(SettingsView::Root, 3).icon == UiIcon::Utilities);
+  assert(tapRow(SettingsView::System, 0).icon == UiIcon::DeviceInfo);
+  assert(tapRow(SettingsView::System, 1).icon == UiIcon::Firmware);
+  assert(tapRow(SettingsView::System, 2).icon == UiIcon::Restart);
+  assert(tapRow(SettingsView::System, 3).icon == UiIcon::Sleep);
+  assert(tapRow(SettingsView::Connectivity, 0).icon == UiIcon::Wifi);
+  assert(tapRow(SettingsView::Connectivity, 1).icon == UiIcon::Bluetooth);
+  assert(tapRow(SettingsView::DisplayMenu, 0).icon == UiIcon::Brightness);
+  assert(tapRow(SettingsView::DisplayMenu, 1).icon == UiIcon::Screensaver);
+  assert(tapRow(SettingsView::DisplayMenu, 2).icon == UiIcon::Photos);
 
   // Bluetooth is compiled out by default; the page shows a message instead.
   assert(!BLUETOOTH_SUPPORTED);
