@@ -9,6 +9,7 @@
 #include "SettingsScreen.h"
 #include "StopwatchScreen.h"
 #include "TimeWeatherScreen.h"
+#include "WeatherScreen.h"
 #include "games/MemoryGame.h"
 #include "games/ReactionGame.h"
 #include "games/SimonGame.h"
@@ -35,6 +36,7 @@ void drawCurrentPage() {
     case PAGE_SNAKE: drawSnakePage(); break;
     case PAGE_MEMORY: drawMemoryPage(); break;
     case PAGE_SIMON: drawSimonPage(); break;
+    case PAGE_WEATHER: drawWeatherPage(); break;
   }
 }
 

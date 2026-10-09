@@ -16,6 +16,7 @@
 #include "StatusClient.h"
 #include "StopwatchScreen.h"
 #include "TouchHandler.h"
+#include "WeatherScreen.h"
 #include "games/MemoryGame.h"
 #include "games/ReactionGame.h"
 #include "games/SimonGame.h"
@@ -61,6 +62,7 @@ void loop() {
   updateSnakeGame();
   updateMemoryGame();
   updateSimonGame();
+  updateWeatherPage();
   updateScreensaver();
   updatePhotos();
   updateSettings();
