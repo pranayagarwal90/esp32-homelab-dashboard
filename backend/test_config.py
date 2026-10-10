@@ -185,15 +185,62 @@ class IntegrationConfigTests(unittest.TestCase):
         self.assertIn("host metrics disabled", cfg.warnings[0])
 
     def test_service_urls(self):
-        cfg = load({"SERVICE_JELLYFIN_HEALTH_URL": "http://192.0.2.20:8096/health",
+        cfg = load({"SERVICES": "jellyfin,technical_blog,immich",
+                    "SERVICE_JELLYFIN_HEALTH_URL": "http://192.0.2.20:8096/health",
                     "SERVICE_TECHNICAL_BLOG_HEALTH_URL": "https://blog.example/",
                     "SERVICE_IMMICH_HEALTH_URL": "", "OTHER": "x"})
         self.assertEqual(cfg.service_urls, {"jellyfin": "http://192.0.2.20:8096/health",
                                             "technical_blog": "https://blog.example/"})
-        bad = load({"SERVICE_NAVIDROME_HEALTH_URL": "http://user:pw@192.0.2.20/"})
+        self.assertEqual(cfg.warnings, ())
+        bad = load({"SERVICES": "navidrome", "SERVICE_NAVIDROME_HEALTH_URL": "http://user:pw@192.0.2.20/"})
         self.assertIn("navidrome", bad.service_urls)  # Kept, so it reports down...
         self.assertIn("SERVICE_NAVIDROME_HEALTH_URL", bad.warnings[0])  # ...and is reported.
         self.assertNotIn("pw", bad.warnings[0])
+
+    def test_url_for_unlisted_or_unknown_service_is_reported_not_used(self):
+        cfg = load({"SERVICES": "ollama", "SERVICE_JELLYFIN_HEALTH_URL": "http://192.0.2.20:8096/health",
+                    "SERVICE_JELIFIN_HEALTH_URL": "http://192.0.2.20/", "SERVICE_NAVIDROME_HEALTH_URL": ""})
+        self.assertEqual(cfg.service_urls, {})
+        self.assertEqual(len(cfg.warnings), 2)
+        self.assertTrue(any("SERVICE_JELIFIN_HEALTH_URL: not a known service" in w for w in cfg.warnings))
+        self.assertTrue(any("jellyfin is not in SERVICES" in w for w in cfg.warnings))
+
+
+class ServicesConfigTests(unittest.TestCase):
+    def enabled(self, text):
+        return load({"SERVICES": text}).enabled_services
+
+    def test_blank_or_absent_enables_nothing(self):
+        self.assertEqual(load().enabled_services, ())
+        for text in ("", "   ", ",", " , ,"):
+            with self.subTest(text=text):
+                self.assertEqual(self.enabled(text), ())
+
+    def test_one_and_multiple_services(self):
+        self.assertEqual(self.enabled("jellyfin"), ("jellyfin",))
+        self.assertEqual(self.enabled("jellyfin,ollama,immich"), ("jellyfin", "ollama", "immich"))
+
+    def test_whitespace_case_and_duplicates(self):
+        self.assertEqual(self.enabled("  Jellyfin ,OLLAMA,, jellyfin ,ollama "), ("jellyfin", "ollama"))
+        self.assertEqual(self.enabled("Technical_Blog"), ("technical_blog",))
+
+    def test_order_is_the_registry_order(self):
+        expected = ("jellyfin", "metube", "ollama", "immich", "technical_blog")
+        self.assertEqual(self.enabled("technical_blog,immich,ollama,metube,jellyfin"), expected)
+        self.assertEqual(self.enabled("jellyfin,metube,ollama,immich,technical_blog"), expected)
+
+    def test_every_known_id_is_accepted(self):
+        from services import SERVICE_IDS
+        self.assertEqual(SERVICE_IDS, ("jellyfin", "navidrome", "metube", "bazarr", "ollama", "cloudflare",
+                                       "mcp", "nextcloud", "immich", "technical_blog"))
+        self.assertEqual(self.enabled(",".join(reversed(SERVICE_IDS))), SERVICE_IDS)
+
+    def test_unknown_service_fails_startup(self):
+        for text in ("jelifin", "jellyfin,plex", "technical-blog", "jellyfin ollama"):
+            with self.subTest(text=text), self.assertRaises(ConfigError) as caught:
+                self.enabled(text)
+            self.assertIn("SERVICES: unknown service", str(caught.exception))
+            self.assertIn("known: jellyfin", str(caught.exception))
 
     def test_generic_defaults_have_no_integrations(self):
         cfg = load()
@@ -253,7 +300,8 @@ class ServerConfigTests(unittest.TestCase):
         # The current firmware reads these names: placeholders, never missing.
         for key in ("india", "singapore", "london"):
             self.assertEqual(payload["timezones"][key]["time"], "--:--")
-        self.assertEqual(set(payload["services"]), set(backend["SERVICE_MATCH_TERMS"]))
+        # SERVICES blank: every key present, none falsely offline.
+        self.assertEqual(payload["services"], dict.fromkeys(backend["SERVICE_IDS"]))
 
     def test_personal_style_configuration_keeps_legacy_shape(self):
         cfg = load({"DASHBOARD_TIMEZONE": "America/New_York", "DASHBOARD_HOST_LABEL": "LABEL",
@@ -328,7 +376,8 @@ class StartupTests(unittest.TestCase):
     def test_invalid_required_values_stop_startup_clearly(self):
         for environ, text in [({"DASHBOARD_PORT": "70000"}, "DASHBOARD_PORT=70000"),
                               ({"DASHBOARD_TIMEZONE": "Mars/Olympus"}, "DASHBOARD_TIMEZONE"),
-                              ({"DOCKER_STATUS_ENABLED": "sometimes"}, "DOCKER_STATUS_ENABLED")]:
+                              ({"DOCKER_STATUS_ENABLED": "sometimes"}, "DOCKER_STATUS_ENABLED"),
+                              ({"SERVICES": "jelifin"}, "SERVICES: unknown service jelifin")]:
             with self.subTest(environ=environ):
                 result = self.run_server(**environ)
                 self.assertEqual(result.returncode, 1)

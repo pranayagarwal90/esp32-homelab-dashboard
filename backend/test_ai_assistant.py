@@ -153,9 +153,31 @@ class ContextTests(unittest.TestCase):
         self.assertIn("WARNING: MeTube is offline", context)
         self.assertIn("WARNING: RAM usage is 87%", context)
         self.assertIn("OK services: Jellyfin, Navidrome, Ollama, Cloudflare, Nextcloud, Technical Blog", context)
-        self.assertIn("UNKNOWN (not reported, not a problem): Immich", context)  # Missing key.
+        self.assertNotIn("Immich", context)  # Missing key: not monitored, not mentioned.
+        self.assertNotIn("UNKNOWN", context)
         self.assertIn("OK: CPU, disk C:, disk D:, disk E:", context)
         self.assertNotIn("18", context)  # Healthy values are named, not numbered.
+
+    def test_unconfigured_services_are_not_problems_or_mentioned(self):
+        data = status()
+        data["services"] = dict.fromkeys(data["services"]) | {"jellyfin": True, "navidrome": False}
+        facts = A.build_facts(data, A.parse_alerts([]))
+        self.assertEqual((facts["online"], facts["offline_other"], facts["problems"]),
+                         (["Jellyfin"], ["Navidrome"], []))
+        self.assertNotIn("unknown", facts)
+        context = A.build_context(facts)
+        self.assertIn("OK services: Jellyfin", context)
+        self.assertIn("OFFLINE, no dashboard alert: Navidrome", context)
+        for label in ("MeTube", "Ollama", "Cloudflare", "Nextcloud", "Immich", "Technical Blog", "UNKNOWN"):
+            self.assertNotIn(label, context)
+        self.assertEqual(A.title_for(facts), "All systems healthy")
+
+    def test_no_services_configured(self):
+        data = status()
+        data["services"] = {}
+        context = A.build_context(A.build_facts(data, A.parse_alerts([])))
+        self.assertNotIn("services", context.lower().replace("ok services", ""))
+        self.assertIn("PROBLEMS (dashboard alerts): none", context)
 
     def test_critical_first_and_disk_value(self):
         facts = self.facts([{"id": "cloudflare", "level": "warning"},

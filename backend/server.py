@@ -11,6 +11,7 @@ import subprocess
 import time
 
 from ai_assistant import AiAssistant, RequestError, default_engines
+from services import SERVICE_IDS, SERVICES_BY_ID
 import config
 
 # All deployment-specific values (location, addresses, paths) come from
@@ -213,22 +214,6 @@ def docker_status():
 
 
 SERVICE_HEALTH_TIMEOUT_SECONDS = 0.5
-# Health URLs come only from config (SERVICE_<NAME>_HEALTH_URL); there are no
-# source defaults. Without a URL, a running Docker container whose name
-# contains one of these terms is the fallback.
-SERVICE_MATCH_TERMS = {
-    "jellyfin": ("jellyfin",),
-    "navidrome": ("navidrome",),
-    "metube": ("metube",),
-    "bazarr": ("bazarr",),
-    "ollama": ("ollama",),
-    "cloudflare": ("cloudflared", "cloudflare"),
-    "mcp": ("mcp",),
-    # No assumed container identities for the new display entries.
-    "nextcloud": (),
-    "immich": (),
-    "technical_blog": (),
-}
 
 
 def check_service_http(url, service=None):
@@ -277,36 +262,33 @@ def check_service_http(url, service=None):
 
 
 def service_status(docker):
-    running_names = {
+    """Every known service id: True/False for services enabled in SERVICES
+    (health URL if set, else a running Docker container whose name matches;
+    neither = down), None for the rest (unknown: never checked, never down)."""
+    running_names = [
         c["name"].lower()
         for c in docker.get("containers", [])
         if c.get("running")
-    }
+    ]
 
-    def any_match(*terms):
-        return any(
-            any(term in name for term in terms)
-            for name in running_names
-        )
+    def docker_match(service_id):
+        terms = SERVICES_BY_ID[service_id].docker_names
+        return any(term in name for term in terms for name in running_names)
 
-    services = {}
-    # True/False for a configured check (URL, else Docker name match); None
-    # when there is no way to check: the firmware shows unknown, never down.
-    with ThreadPoolExecutor(max_workers=len(SERVICE_MATCH_TERMS)) as executor:
+    services = dict.fromkeys(SERVICE_IDS)
+    with ThreadPoolExecutor(max_workers=len(SERVICE_IDS)) as executor:
         checks = {}
-        for name, terms in SERVICE_MATCH_TERMS.items():
-            url = CONFIG.service_urls.get(name, "")
+        for service_id in CONFIG.enabled_services:
+            url = CONFIG.service_urls.get(service_id)
             if url:
-                checks[name] = executor.submit(check_service_http, url, name)
-            elif CONFIG.docker_status_enabled and terms:
-                services[name] = any_match(*terms)
+                checks[service_id] = executor.submit(check_service_http, url, service_id)
             else:
-                services[name] = None
-        for name, check in checks.items():
+                services[service_id] = docker_match(service_id)
+        for service_id, check in checks.items():
             try:
-                services[name] = bool(check.result())
+                services[service_id] = bool(check.result())
             except Exception:
-                services[name] = False
+                services[service_id] = False
     return services
 
 
@@ -678,13 +660,13 @@ if __name__ == "__main__":
     print("Weather:", "configured" if CONFIG.weather_location else "disabled")
     print("Host metrics:", CONFIG.host_metrics_url or "disabled")
     print("Docker status:", "enabled" if CONFIG.docker_status_enabled else "disabled")
-    print("Service checks:", ", ".join(sorted(CONFIG.service_urls)) or "none configured")
+    print("Services:", ", ".join(
+        f"{service_id} ({'URL' if service_id in CONFIG.service_urls else 'Docker'})"
+        for service_id in CONFIG.enabled_services) or "none (SERVICES is blank)")
     photos_problem = ensure_photos_dir()
     print("Photos:", CONFIG.photos_dir, f"(unusable: {photos_problem})" if photos_problem else "")
     print("AI primary:", f"{AI.primary.model} (configured)" if AI.primary else "not configured")
     print("AI fallback:", AI.fallback.model)
-    for name in sorted(set(CONFIG.service_urls) - set(SERVICE_MATCH_TERMS)):
-        print(f"Warning: SERVICE_{name.upper()}_HEALTH_URL is not a known service; ignored")
     for warning in CONFIG.warnings:
         print("Warning:", warning)
     print("Endpoints: /api/status, /api/photos, /photos/<file>, /api/ai/status, POST /api/ai/explain")

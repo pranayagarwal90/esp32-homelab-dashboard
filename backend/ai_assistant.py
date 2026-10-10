@@ -18,6 +18,8 @@ from datetime import datetime
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
+from services import SERVICE_DEFINITIONS
+
 # Two local Ollama engines (nothing leaves the network), configured in
 # config.py (AiConfig):
 #   primary  - an optional GPU machine on the LAN, used when reachable;
@@ -60,11 +62,7 @@ MODES = {
 # The dashboard's alertable services (firmware AlertLogic.h) and the services
 # shown on its SERVICES page (firmware ServicesLogic.h), in display order.
 ALERT_SERVICES = ("jellyfin", "navidrome", "metube", "ollama", "cloudflare")
-SERVICE_LABELS = {
-    "jellyfin": "Jellyfin", "navidrome": "Navidrome", "metube": "MeTube", "ollama": "Ollama",
-    "cloudflare": "Cloudflare", "nextcloud": "Nextcloud", "immich": "Immich",
-    "technical_blog": "Technical Blog",
-}
+SERVICE_LABELS = {service.id: service.label for service in SERVICE_DEFINITIONS if service.displayed}
 ALERT_IDS = set(ALERT_SERVICES) | {"ram", "disk", "stale"}
 LEVELS = ("critical", "warning")
 MAX_ALERTS = 12
@@ -188,10 +186,10 @@ def build_facts(status, alerts):
             problems.append({"level": alert["level"], "text": text, "subject": subject, "id": alert["id"]})
         problems.sort(key=lambda p: LEVELS.index(p["level"]))
 
-    online, offline, unknown = [], [], []
-    for key, label in SERVICE_LABELS.items():
-        value = services.get(key)
-        (online if value is True else offline if value is False else unknown).append(label)
+    # Only monitored services: null or missing means not configured, which is
+    # neither a problem nor worth mentioning.
+    online = [label for key, label in SERVICE_LABELS.items() if services.get(key) is True]
+    offline = [label for key, label in SERVICE_LABELS.items() if services.get(key) is False]
     # The dashboard's alert wins if the backend's own check disagrees (race).
     alerted = {p["subject"] for p in problems}
     online = [name for name in online if name not in alerted]
@@ -204,7 +202,6 @@ def build_facts(status, alerts):
         "online": online,
         # Offline services the dashboard does not alert on (shown red on SERVICES).
         "offline_other": [name for name in offline if name not in alerted],
-        "unknown": unknown,
         "cpu": _percent((status.get("cpu") or {}).get("percent")) if host_ok else None,
         "ram": _percent((status.get("memory") or {}).get("percent")) if host_ok else None,
         "disks": disks if host_ok else {},
@@ -259,8 +256,6 @@ def build_context(facts):
         lines.append("OK services: " + ", ".join(n for n in facts["online"]))
     if facts["offline_other"]:
         lines.append("OFFLINE, no dashboard alert: " + ", ".join(facts["offline_other"]))
-    if facts["unknown"]:
-        lines.append("UNKNOWN (not reported, not a problem): " + ", ".join(facts["unknown"]))
     return "\n".join(lines)
 
 
@@ -274,7 +269,7 @@ def fingerprint(mode, facts):
         "alerts_known": facts["alerts_known"],
         "problems": [(p["level"], p["text"] if p["id"] not in ("ram", "disk") else p["subject"])
                      for p in facts["problems"]],
-        "online": facts["online"], "offline": facts["offline_other"], "unknown": facts["unknown"],
+        "online": facts["online"], "offline": facts["offline_other"],
         "host": facts["host_available"], "ram": coarse(facts["ram"], 5),
         "disks": {k: coarse(v, 5) for k, v in facts["disks"].items()},
     }

@@ -16,6 +16,9 @@ Invalid core settings stop startup with ConfigError. An invalid optional
 integration is disabled and reported in Config.warnings; it never silently
 falls back to a guessed value.
 
+Services: only the ids listed in SERVICES (see services.py) are monitored;
+every other service is reported as null (unknown), never as down.
+
 The .env format is deliberately small: KEY=value per line; blank lines and
 lines starting with # are ignored; a value may be wrapped in matching single
 or double quotes (taken literally, no escapes); in an unquoted value,
@@ -27,6 +30,8 @@ from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 import os
 import re
+
+from services import SERVICE_DEFINITIONS, SERVICE_IDS
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_ENV_FILE = PROJECT_ROOT / ".env"
@@ -223,7 +228,8 @@ class Config:
     weather_location: tuple = None          # (latitude, longitude), or None = disabled.
     host_metrics_url: str = ""              # "" = disabled.
     docker_status_enabled: bool = True
-    service_urls: dict = field(default_factory=dict)  # Lowercase name -> URL; configured only.
+    enabled_services: tuple = ()           # SERVICES ids, in registry order.
+    service_urls: dict = field(default_factory=dict)  # Enabled id -> health URL (when set).
     ai: AiConfig = AiConfig("", DEFAULT_AI_PRIMARY_MODEL, DEFAULT_AI_FALLBACK_URL, DEFAULT_AI_FALLBACK_MODEL)
     env_file: Path = None                   # The file that was read, if any.
     warnings: tuple = ()
@@ -307,21 +313,39 @@ def _ai(source, warnings):
     )
 
 
-def _services(source, warnings):
-    urls = {}
+def parse_services(text, name="SERVICES"):
+    """'jellyfin, Ollama,jellyfin' -> ('jellyfin', 'ollama'): case-insensitive,
+    deduplicated, in registry order; empty items are ignored. An unknown id
+    raises ConfigError (a typo must not silently disable monitoring)."""
+    requested = {item.strip().lower() for item in text.split(",")} - {""}
+    unknown = sorted(requested - set(SERVICE_IDS))
+    if unknown:
+        raise ConfigError(f"{name}: unknown service {', '.join(unknown)}; "
+                          f"known: {', '.join(SERVICE_IDS)}")
+    return tuple(service for service in SERVICE_IDS if service in requested)
+
+
+def _service_urls(source, enabled, warnings):
+    """Health URLs of enabled services. URLs for unknown or unlisted
+    services are reported, not used."""
+    known = {service.env for service in SERVICE_DEFINITIONS}
     for name in sorted(source.names()):
-        match = _SERVICE_KEY.fullmatch(name)
-        if not match:
-            continue
-        url = get_string(source, name, "")
+        if _SERVICE_KEY.fullmatch(name) and name not in known and get_string(source, name, ""):
+            warnings.append(f"{name}: not a known service; ignored")
+    urls = {}
+    for service in SERVICE_DEFINITIONS:
+        url = get_string(source, service.env, "")
         if not url:
-            continue  # Blank: not configured.
+            continue  # Blank: no URL check (Docker detection may apply).
+        if service.id not in enabled:
+            warnings.append(f"{service.env} is set but {service.id} is not in SERVICES; ignored")
+            continue
         problem = http_url_problem(url)
         if problem:
             # Kept, so the check fails and the service reports down rather
             # than quietly disappearing.
-            warnings.append(f"{name}: {problem}; the service will report down")
-        urls[match.group(1).lower()] = url
+            warnings.append(f"{service.env}: {problem}; the service will report down")
+        urls[service.id] = url
     return urls
 
 
@@ -337,6 +361,7 @@ def load(environ=None, env_file=None):
     source = Source(environ, file_values)
     warnings = []
 
+    enabled_services = parse_services(get_string(source, "SERVICES", ""))
     bind = get_string(source, "DASHBOARD_BIND", DEFAULT_BIND)
     if re.search(r"\s", bind):
         raise ConfigError(f"DASHBOARD_BIND={bind!r}: expected an address or host name")
@@ -351,7 +376,8 @@ def load(environ=None, env_file=None):
         weather_location=_weather(source, warnings),
         host_metrics_url=_optional_url(source, "HOST_METRICS_URL", warnings, "host metrics"),
         docker_status_enabled=get_bool(source, "DOCKER_STATUS_ENABLED", True),
-        service_urls=_services(source, warnings),
+        enabled_services=enabled_services,
+        service_urls=_service_urls(source, enabled_services, warnings),
         ai=_ai(source, warnings),
         env_file=path if path and path.is_file() else None,
         warnings=tuple(warnings),

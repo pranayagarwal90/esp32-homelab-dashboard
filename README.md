@@ -106,16 +106,39 @@ See `.env.example` for every setting.
 The Services tab displays Jellyfin, Navidrome, Ollama, Cloudfare, NextCloud,
 Immich, and Technical Blog in that order. The `/api/status` services object
 retains its original seven keys for older firmware and adds `nextcloud`,
-`immich`, and `technical_blog`. Each value is `true` (up), `false` (down) or
-`null` (no way to check it); the firmware shows `null` or a missing key as
-unknown (grey) and never raises an alert for it.
+`immich`, and `technical_blog` (plus the older `bazarr` and `mcp`, which the
+firmware does not show).
+
+## Choosing services: `SERVICES`
+
+`SERVICES` lists the services this dashboard monitors, for example:
+
+```sh
+SERVICES=jellyfin,ollama,immich
+```
+
+Ids are case-insensitive and deduplicated; an unknown id (such as a typo)
+stops startup with a configuration error. Blank monitors nothing.
+
+| Service | `/api/status` value | SERVICES page | Alert |
+| --- | --- | --- | --- |
+| Not listed | `null` (never checked, no Docker lookup) | grey (unknown) | never |
+| Listed, healthy | `true` | green | none |
+| Listed, down or not found | `false` | red | warning (alertable services) |
+
+Unlisted services are not checked, not considered offline and never generate
+alerts. Every key stays in the response so older firmware keeps working. The
+AI assistant does not mention unlisted services. If a service is unlisted
+while the display is showing an alert for it, the alert stays until the
+service is reported again or the display restarts.
 
 ## Health URLs
 
-There are no source defaults. Configure a check with
+There are no source defaults. Configure a check for a listed service with
 `SERVICE_<NAME>_HEALTH_URL`, with uppercase names: `JELLYFIN`, `NAVIDROME`,
 `METUBE`, `OLLAMA`, `NEXTCLOUD`, `IMMICH`, `TECHNICAL_BLOG`, `CLOUDFLARE`,
-`BAZARR` or `MCP`. Service-specific checks:
+`BAZARR` or `MCP`. A URL for an unlisted service is ignored with a startup
+warning. Service-specific checks:
 
 | Service | Typical URL | Healthy when |
 | --- | --- | --- |
@@ -126,11 +149,13 @@ There are no source defaults. Configure a check with
 | Immich | `http://<host>:2283/api/server/ping` | 2xx plus res=pong |
 | Others | any page | 2xx |
 
-Without a URL, and with `DOCKER_STATUS_ENABLED=true` (default), the legacy
-services (Jellyfin, Navidrome, MeTube, Bazarr, Ollama, Cloudflare, MCP) report
-up when a running container name contains the service name. NextCloud, Immich
-and Technical Blog have no assumed container identity, so without a URL they
-are `null`; with Docker status disabled, every service without a URL is `null`.
+A listed service without a URL is up when, with `DOCKER_STATUS_ENABLED=true`
+(default), a running container name contains its Docker name (Jellyfin,
+Navidrome, MeTube, Bazarr, Ollama, Cloudflare/`cloudflared`, MCP); otherwise
+it is down. NextCloud, Immich and Technical Blog have no Docker identity and
+need a URL. With Docker status disabled, `docker` is never run and a listed
+service without a URL is down. Service definitions live in
+`backend/services.py`.
 
 Configured checks issue HTTP(S) GET without redirects or proxy environment
 variables. HTTPS verifies certificates. Custom authentication headers and URLs
@@ -222,6 +247,7 @@ g++ -std=c++11 -Wall -Wextra -Werror -Ifirmware/include firmware/test/test_weath
 g++ -std=c++11 -Wall -Wextra -Werror -Ifirmware/include firmware/test/test_navigation.cpp -o /tmp/test-navigation
 # Needs ArduinoJson from a previous `pio run` (header-only):
 g++ -std=c++11 -Wall -Wextra -Werror -Ifirmware/include -Ifirmware/.pio/libdeps/esp32dev/ArduinoJson/src firmware/test/test_ai_logic.cpp -o /tmp/test-ai && /tmp/test-ai
+g++ -std=c++11 -Wall -Wextra -Werror -Ifirmware/include -Ifirmware/.pio/libdeps/esp32dev/ArduinoJson/src firmware/test/test_service_status.cpp -o /tmp/test-service-status && /tmp/test-service-status
 /tmp/test-settings
 /tmp/test-alerts
 /tmp/test-stopwatch
