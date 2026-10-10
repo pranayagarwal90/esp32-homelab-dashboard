@@ -1,6 +1,7 @@
 """AI assistant tests: Ollama is always mocked; never contacts a model."""
 import io
 import json
+import os
 import runpy
 import socket
 import threading
@@ -14,8 +15,11 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 import ai_assistant as A
+import config
 
-with patch("http.server.HTTPServer"), redirect_stdout(io.StringIO()):
+# Hermetic: never read the developer's .env.
+with patch.dict(os.environ, {"DASHBOARD_ENV_FILE": ""}), patch("http.server.HTTPServer"), \
+        redirect_stdout(io.StringIO()):
     backend = runpy.run_path(str(Path(__file__).with_name("server.py")))
 globals_ = backend["get_status"].__globals__
 
@@ -195,9 +199,9 @@ class ContextTests(unittest.TestCase):
 
     def test_no_private_or_internal_data(self):
         data = status()
-        data["hostname"] = "HOME<script>SERVER http://192.168.1.13"
+        data["hostname"] = "HOME<script>SERVER http://192.0.2.13"
         context = A.build_context(A.build_facts(data, A.parse_alerts(WARNINGS))) + A.SYSTEM_PROMPT
-        for secret in ("192.168", "http", "HomeWifi", "secret-db", "Bay1", "password", "Bazarr", "MCP",
+        for secret in ("192.0.2", "http", "HomeWifi", "secret-db", "Bay1", "password", "Bazarr", "MCP",
                        "11434", "/home/", "<script>"):
             self.assertNotIn(secret, context)
         self.assertLess(len(context), 2000)
@@ -556,17 +560,50 @@ class RouterTests(unittest.TestCase):
 
     def test_response_has_no_addresses_or_models(self):
         text = json.dumps(self.ask())
-        for secret in ("http", ".test", "qwen", "llama", "10.10", "11434", "laptop"):
+        for secret in ("http", ".test", "qwen", "llama", "192.0.2", "11434", "laptop"):
             self.assertNotIn(secret, text)
 
+    def engines(self, environ):
+        return A.default_engines(config.load(environ=environ, env_file="").ai)
+
     def test_default_configuration(self):
-        with patch.object(A, "PRIMARY_URL", ""):
-            primary, fallback = A.default_engines()
-        self.assertIsNone(primary)  # No laptop address in the source.
+        primary, fallback = self.engines({})
+        self.assertIsNone(primary)  # No primary address in the source.
         self.assertEqual((fallback.url, fallback.model), ("http://127.0.0.1:11434", "llama3.2:3b"))
-        with patch.object(A, "PRIMARY_URL", "http://lan.test:11434"):
-            primary, _ = A.default_engines()
-        self.assertEqual((primary.model, primary.options["num_ctx"]), ("qwen2.5:7b", 2048))
+        self.assertEqual((fallback.options, fallback.timeouts), (A.FALLBACK_OPTIONS, A.FALLBACK_TIMEOUT))
+        primary, _ = self.engines({"AI_PRIMARY_OLLAMA_URL": "http://lan.test:11434/"})
+        self.assertEqual((primary.url, primary.model, primary.options["num_ctx"], primary.timeouts),
+                         ("http://lan.test:11434", "qwen2.5:7b", 2048, A.PRIMARY_TIMEOUT))
+        primary, _ = self.engines({"AI_PRIMARY_OLLAMA_URL": ""})
+        self.assertIsNone(primary)
+
+    def test_configured_models_and_legacy_names(self):
+        primary, fallback = self.engines({"AI_PRIMARY_OLLAMA_URL": "http://gpu.test:11434",
+                                          "AI_PRIMARY_OLLAMA_MODEL": "big:1",
+                                          "AI_FALLBACK_OLLAMA_URL": "http://cpu.test:11434",
+                                          "AI_FALLBACK_OLLAMA_MODEL": "small:1"})
+        self.assertEqual((primary.url, primary.model), ("http://gpu.test:11434", "big:1"))
+        self.assertEqual((fallback.url, fallback.model), ("http://cpu.test:11434", "small:1"))
+        _, fallback = self.engines({"AI_OLLAMA_URL": "http://old.test:11434", "AI_OLLAMA_MODEL": "old:1"})
+        self.assertEqual((fallback.url, fallback.model), ("http://old.test:11434", "old:1"))
+        _, fallback = self.engines({"AI_OLLAMA_URL": "http://old.test:11434",
+                                    "AI_FALLBACK_OLLAMA_URL": "http://new.test:11434"})
+        self.assertEqual(fallback.url, "http://new.test:11434")  # The new name wins.
+
+    def test_invalid_primary_url_disables_only_the_primary(self):
+        cfg = config.load(environ={"AI_PRIMARY_OLLAMA_URL": "ftp://gpu.test"}, env_file="")
+        self.assertEqual(cfg.ai.primary_url, "")
+        self.assertTrue(any("AI_PRIMARY_OLLAMA_URL" in w for w in cfg.warnings))
+        primary, fallback = A.default_engines(cfg.ai)
+        self.assertIsNone(primary)
+        self.assertEqual(fallback.url, "http://127.0.0.1:11434")
+
+    def test_unreachable_fallback_degrades(self):
+        # Generic defaults with no Ollama running: unavailable, never an exception.
+        primary, fallback = self.engines({"AI_FALLBACK_OLLAMA_URL": ""})
+        fallback.get = lambda url, timeout: (_ for _ in ()).throw(ValueError("unknown url type"))
+        result = A.AiAssistant(lambda: status(), primary, fallback).status()
+        self.assertEqual((result["available"], result["error"]), (False, "AI service is not responding"))
 
 
 class EndpointTests(unittest.TestCase):

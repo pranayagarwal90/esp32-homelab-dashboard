@@ -2,6 +2,7 @@
 import io
 import json
 from datetime import datetime
+import os
 from pathlib import Path
 import runpy
 import unittest
@@ -10,10 +11,18 @@ from unittest.mock import Mock, patch
 from urllib.parse import parse_qs, urlsplit
 from zoneinfo import ZoneInfo
 
-with patch("http.server.HTTPServer"), redirect_stdout(io.StringIO()):
+import config
+
+# Hermetic: never read the developer's .env.
+with patch.dict(os.environ, {"DASHBOARD_ENV_FILE": ""}), patch("http.server.HTTPServer"), \
+        redirect_stdout(io.StringIO()):
     backend = runpy.run_path(str(Path(__file__).with_name("server.py")))
 get_weather = backend["get_weather"]
 globals_ = get_weather.__globals__
+# A fixture location (not a real deployment) in the zone the fixtures use.
+WEATHER_CONFIG = config.load(environ={"DASHBOARD_TIMEZONE": "America/New_York",
+                                      "WEATHER_LATITUDE": "40.71", "WEATHER_LONGITUDE": "-74.01"},
+                             env_file="")
 solar_times = backend["solar_times"]
 weather_payload = backend["weather_payload"]
 ZONE = ZoneInfo("America/New_York")
@@ -30,7 +39,7 @@ class WeatherTests(unittest.TestCase):
     def setUp(self):
         self.now = datetime(2026, 10, 2, 12, tzinfo=ZONE).timestamp()
         state = patch.dict(globals_, {"_weather_cache": None, "_weather_cache_time": 0,
-                                     "_weather_cache_day": None})
+                                     "_weather_cache_day": None, "CONFIG": WEATHER_CONFIG})
         state.start()
         self.addCleanup(state.stop)
         clock_patch = patch.object(globals_["time"], "time", return_value=self.now)
@@ -58,6 +67,7 @@ class WeatherTests(unittest.TestCase):
                                                  "precipitation,weather_code,wind_speed_10m"])
             self.assertEqual(params["temperature_unit"], ["celsius"])
             self.assertEqual(params["timezone"], ["America/New_York"])
+            self.assertEqual((params["latitude"], params["longitude"]), (["40.71"], ["-74.01"]))
         self.assertEqual(weather["temperature_c"], 20.2)
         self.assertEqual(weather["condition"], "Partly cloudy")
         self.assertTrue(weather["available"])
@@ -135,7 +145,7 @@ class RichWeatherTests(unittest.TestCase):
     def setUp(self):
         self.now = datetime(2026, 10, 2, 12, 30, tzinfo=ZONE).timestamp()
         state = patch.dict(globals_, {"_weather_cache": None, "_weather_cache_time": 0,
-                                     "_weather_cache_day": None})
+                                     "_weather_cache_day": None, "CONFIG": WEATHER_CONFIG})
         state.start()
         self.addCleanup(state.stop)
         clock_patch = patch.object(globals_["time"], "time", return_value=self.now)
@@ -253,6 +263,38 @@ class RichWeatherTests(unittest.TestCase):
             unavailable = weather_payload(get_weather(), self.clock.return_value)
         self.assertFalse(unavailable["available"])
         self.assertNotIn("hourly", unavailable)
+
+
+class WeatherConfigTests(unittest.TestCase):
+    def setUp(self):
+        state = patch.dict(globals_, {"_weather_cache": None, "_weather_cache_time": 0,
+                                     "_weather_cache_day": None,
+                                     "urlopen": Mock(side_effect=AssertionError("network call"))})
+        state.start()
+        self.addCleanup(state.stop)
+
+    def weather_with(self, environ):
+        with patch.dict(globals_, {"CONFIG": config.load(environ=environ, env_file="")}):
+            return get_weather()
+
+    def test_blank_coordinates_disable_weather_without_a_request(self):
+        for environ in ({}, {"WEATHER_LATITUDE": "", "WEATHER_LONGITUDE": ""}):
+            with self.subTest(environ=environ):
+                self.assertEqual(self.weather_with(environ),
+                                 {"available": False, "error": "weather not configured"})
+        globals_["urlopen"].assert_not_called()
+
+    def test_one_coordinate_or_invalid_coordinates_disable_weather(self):
+        for environ in ({"WEATHER_LATITUDE": "40.7"}, {"WEATHER_LONGITUDE": "-74"},
+                        {"WEATHER_LATITUDE": "91", "WEATHER_LONGITUDE": "0"},
+                        {"WEATHER_LATITUDE": "north", "WEATHER_LONGITUDE": "0"}):
+            with self.subTest(environ=environ):
+                self.assertFalse(self.weather_with(environ)["available"])
+        globals_["urlopen"].assert_not_called()
+
+    def test_disabled_weather_payload_has_no_forecast(self):
+        payload = backend["weather_payload"](self.weather_with({}), 0)
+        self.assertEqual(payload, {"available": False, "error": "weather not configured"})
 
 
 if __name__ == "__main__":

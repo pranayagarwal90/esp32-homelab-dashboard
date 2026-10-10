@@ -13,12 +13,26 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from unittest.mock import patch
 from urllib.request import urlopen
 
+import config
 
-with patch("http.server.HTTPServer"), redirect_stdout(io.StringIO()):
+# Hermetic: never read the developer's .env.
+with patch.dict(os.environ, {"DASHBOARD_ENV_FILE": ""}), patch("http.server.HTTPServer"), \
+        redirect_stdout(io.StringIO()):
     backend = runpy.run_path(str(Path(__file__).with_name("server.py")))
-service_status = backend["service_status"]
 check_http = backend["check_service_http"]
-globals_ = service_status.__globals__
+globals_ = backend["service_status"].__globals__
+
+
+def test_config():
+    """Config from the test's os.environ only (setUp clears it)."""
+    return config.load(environ=dict(os.environ), env_file="")
+
+
+def service_status(docker):
+    with patch.dict(globals_, {"CONFIG": test_config()}):
+        return backend["service_status"](docker)
+
+
 LEGACY_KEYS = {"jellyfin", "navidrome", "metube", "bazarr", "ollama", "cloudflare", "mcp"}
 NEW_KEYS = {"nextcloud", "immich", "technical_blog"}
 KEYS = LEGACY_KEYS | NEW_KEYS
@@ -70,9 +84,6 @@ class ServiceHealthTests(unittest.TestCase):
         self.env = patch.dict(os.environ, {}, clear=True)
         self.env.start()
         self.addCleanup(self.env.stop)
-        defaults = patch.dict(globals_, {"DEFAULT_SERVICE_HEALTH_URLS": {}})
-        defaults.start()
-        self.addCleanup(defaults.stop)
 
     def test_http_results_and_invalid_urls(self):
         for path, expected in [("/ok", True), ("/fail", False), ("/auth", False), ("/redirect", False)]:
@@ -101,7 +112,9 @@ class ServiceHealthTests(unittest.TestCase):
             {"name": name, "running": name != "metube"} for name in KEYS
         ]}
         result = service_status(docker)
-        self.assertEqual(result, {name: name in LEGACY_KEYS and name != "metube" for name in KEYS})
+        # New entries have no container identity: without a URL they are unknown.
+        expected = {name: name != "metube" for name in LEGACY_KEYS} | dict.fromkeys(NEW_KEYS)
+        self.assertEqual(result, expected)
         os.environ["SERVICE_JELLYFIN_HEALTH_URL"] = self.url + "/jellyfin"
         self.assertIs(service_status({})["jellyfin"], True)
         os.environ["SERVICE_BAZARR_HEALTH_URL"] = self.url + "/fail"
@@ -143,25 +156,54 @@ class ServiceHealthTests(unittest.TestCase):
         result = service_status(docker)
         self.assertTrue(all(result[name] is False for name in ["jellyfin", "navidrome", "metube", "ollama"]))
 
-    def test_metube_default_and_explicit_disable(self):
-        with patch.dict(globals_, {"DEFAULT_SERVICE_HEALTH_URLS": {"metube": self.url + "/"}}):
-            self.assertIs(service_status({})["metube"], True)
-            os.environ["SERVICE_METUBE_HEALTH_URL"] = ""
-            self.assertIs(service_status({})["metube"], False)
-            self.assertIs(service_status({"containers": [{"name": "metube", "running": True}]})["metube"], True)
+    def test_metube_url_and_blank_fallback(self):
+        os.environ["SERVICE_METUBE_HEALTH_URL"] = self.url + "/"
+        self.assertIs(service_status({})["metube"], True)
+        os.environ["SERVICE_METUBE_HEALTH_URL"] = ""
+        self.assertIs(service_status({})["metube"], False)
+        self.assertIs(service_status({"containers": [{"name": "metube", "running": True}]})["metube"], True)
 
-    def test_verified_defaults_and_environment_override(self):
-        with patch.dict(globals_, {"DEFAULT_SERVICE_HEALTH_URLS": {"immich": self.url + "/immich"}}):
-            self.assertIs(service_status({})["immich"], True)
-            os.environ["SERVICE_IMMICH_HEALTH_URL"] = self.url + "/fail"
-            self.assertIs(service_status({})["immich"], False)
-            os.environ["SERVICE_IMMICH_HEALTH_URL"] = ""
-            self.assertIs(service_status({})["immich"], False)
+    def test_no_source_defaults(self):
+        # Nothing configured, no containers: legacy services fall back to
+        # Docker (down), new ones are unknown. No address is probed.
+        with patch.dict(globals_, {"check_service_http": lambda *args: self.fail("probed")}):
+            result = service_status({"containers": []})
+        self.assertEqual(result, dict.fromkeys(LEGACY_KEYS, False) | dict.fromkeys(NEW_KEYS))
 
-    def test_status_route_preserves_boolean_schema(self):
+    def test_docker_disabled_reports_unconfigured_as_unknown(self):
+        os.environ["DOCKER_STATUS_ENABLED"] = "false"
+        os.environ["SERVICE_JELLYFIN_HEALTH_URL"] = self.url + "/jellyfin"
+        running = {"containers": [{"name": name, "running": True} for name in KEYS]}
+        result = service_status(running)
+        self.assertIs(result["jellyfin"], True)  # Configured checks still run.
+        self.assertEqual({k: v for k, v in result.items() if k != "jellyfin"},
+                         dict.fromkeys(KEYS - {"jellyfin"}))
+        with patch.dict(globals_, {"CONFIG": test_config()}), \
+                patch.object(globals_["subprocess"], "run", side_effect=AssertionError("docker called")):
+            docker = backend["docker_status"]()
+        self.assertEqual((docker["available"], docker["containers"]), (False, []))
+
+    def test_docker_enabled_runs_docker_cli(self):
+        completed = backend["subprocess"].CompletedProcess([], 0, "metube|Up 2 hours\n", "")
+        with patch.dict(globals_, {"CONFIG": test_config()}), \
+                patch.object(globals_["subprocess"], "run", return_value=completed) as run:
+            docker = backend["docker_status"]()
+        run.assert_called_once()
+        self.assertEqual(docker["containers"], [{"name": "metube", "status": "Up 2 hours", "running": True}])
+
+    def test_configured_and_unconfigured_service(self):
+        os.environ["SERVICE_IMMICH_HEALTH_URL"] = self.url + "/immich"
+        self.assertIs(service_status({})["immich"], True)
+        os.environ["SERVICE_IMMICH_HEALTH_URL"] = self.url + "/fail"
+        self.assertIs(service_status({})["immich"], False)
+        os.environ["SERVICE_IMMICH_HEALTH_URL"] = ""
+        self.assertIsNone(service_status({})["immich"])  # Unconfigured: unknown, not down.
+
+    def test_status_route_preserves_service_keys(self):
         os.environ["SERVICE_JELLYFIN_HEALTH_URL"] = self.url + "/jellyfin"
         os.environ["SERVICE_BAZARR_HEALTH_URL"] = self.url + "/fail"
         replacements = {
+            "CONFIG": test_config(),
             "get_windows_metrics": lambda: {"available": True, "hostname": "test-host"},
             "docker_status": lambda: {"containers": [], "available": True, "running": 0},
             "get_weather": lambda: {"available": True},
@@ -180,7 +222,9 @@ class ServiceHealthTests(unittest.TestCase):
                 thread.join()
         services = payload["services"]
         self.assertEqual(set(services), KEYS)
-        self.assertTrue(all(type(value) is bool for value in services.values()))
+        # Checkable services stay booleans; unconfigured new entries are null.
+        self.assertTrue(all(type(services[key]) is bool for key in LEGACY_KEYS))
+        self.assertEqual({key: services[key] for key in NEW_KEYS}, dict.fromkeys(NEW_KEYS))
         self.assertIs(services["jellyfin"], True)
         self.assertIs(services["bazarr"], False)
         self.assertEqual(payload["hostname"], "test-host")
@@ -197,6 +241,7 @@ class ServiceHealthTests(unittest.TestCase):
             os.environ["SERVICE_NAVIDROME_HEALTH_URL"] = self.url + "/slow"
             os.environ["SERVICE_OLLAMA_HEALTH_URL"] = self.url + "/ollama"
             replacements = {
+                "CONFIG": test_config(),
                 "get_windows_metrics": lambda: {"available": True, "hostname": "test-host"},
                 "docker_status": lambda: {"containers": [{"name": "metube", "running": True}]},
                 "get_weather": lambda: {"available": True},
@@ -217,7 +262,7 @@ class ServiceHealthTests(unittest.TestCase):
                     thread.join()
         services = payload["services"]
         self.assertEqual(set(services), KEYS)
-        self.assertTrue(all(type(value) is bool for value in services.values()))
+        self.assertTrue(all(type(services[key]) is bool for key in LEGACY_KEYS))
         self.assertIs(services["jellyfin"], True)
         self.assertIs(services["ollama"], True)
         self.assertIs(services["metube"], False)

@@ -11,7 +11,6 @@ Nothing here executes anything: no commands, restarts or remote actions.
 """
 import hashlib
 import json
-import os
 import re
 import threading
 import time
@@ -19,20 +18,15 @@ from datetime import datetime
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
-# Two local Ollama engines (nothing leaves the network):
-#   primary  - the GPU laptop on the private LAN, used when reachable;
-#              AI_PRIMARY_OLLAMA_URL (unset: no primary), AI_PRIMARY_OLLAMA_MODEL.
-#   fallback - the HomeServer's own CPU Ollama; AI_FALLBACK_OLLAMA_URL /
-#              AI_FALLBACK_OLLAMA_MODEL (AI_OLLAMA_URL / AI_OLLAMA_MODEL still work).
-# Same pattern and laptop endpoint setting as the technical blog's chatbot.
-PRIMARY_URL = os.environ.get("AI_PRIMARY_OLLAMA_URL", "").rstrip("/")
-# qwen2.5:7b: fits the RTX 3070's 8 GB, ~0.4 s warm, and is the model the blog
-# already keeps on the laptop (one resident copy serves both).
-PRIMARY_MODEL = os.environ.get("AI_PRIMARY_OLLAMA_MODEL", "qwen2.5:7b")
-FALLBACK_URL = os.environ.get("AI_FALLBACK_OLLAMA_URL",
-                              os.environ.get("AI_OLLAMA_URL", "http://127.0.0.1:11434")).rstrip("/")
-# llama3.2:3b: the fastest installed CPU model that follows the format.
-FALLBACK_MODEL = os.environ.get("AI_FALLBACK_OLLAMA_MODEL", os.environ.get("AI_OLLAMA_MODEL", "llama3.2:3b"))
+# Two local Ollama engines (nothing leaves the network), configured in
+# config.py (AiConfig):
+#   primary  - an optional GPU machine on the LAN, used when reachable;
+#              AI_PRIMARY_OLLAMA_URL (blank: no primary), AI_PRIMARY_OLLAMA_MODEL
+#              (default qwen2.5:7b, fits an 8 GB GPU).
+#   fallback - the backend host's own CPU Ollama; AI_FALLBACK_OLLAMA_URL /
+#              AI_FALLBACK_OLLAMA_MODEL (default llama3.2:3b, the fastest small
+#              CPU model that follows the format; AI_OLLAMA_URL / AI_OLLAMA_MODEL
+#              still work).
 
 HEALTH_TIMEOUT_SECONDS = 0.8   # /api/tags and /api/ps probes; never a generation.
 HEALTH_SECONDS = 10            # Probe results are reused this long.
@@ -553,10 +547,11 @@ def _seconds_until(stamp, now):
         return 0
 
 
-def default_engines(clock=time.time):
-    primary = Engine("primary", PRIMARY_URL, PRIMARY_MODEL, PRIMARY_TIMEOUT, PRIMARY_OPTIONS, clock) \
-        if PRIMARY_URL else None
-    fallback = Engine("fallback", FALLBACK_URL, FALLBACK_MODEL, FALLBACK_TIMEOUT, FALLBACK_OPTIONS, clock)
+def default_engines(ai, clock=time.time):
+    """(primary or None, fallback) from a config.AiConfig."""
+    primary = Engine("primary", ai.primary_url, ai.primary_model, PRIMARY_TIMEOUT, PRIMARY_OPTIONS, clock) \
+        if ai.primary_url else None
+    fallback = Engine("fallback", ai.fallback_url, ai.fallback_model, FALLBACK_TIMEOUT, FALLBACK_OPTIONS, clock)
     return primary, fallback
 
 
@@ -565,10 +560,8 @@ class AiAssistant:
     and has its model, otherwise, or after it fails, the fallback exactly
     once. The ESP32 gets one answer and only learns "primary" or "fallback"."""
 
-    def __init__(self, status_source, primary=None, fallback=None, clock=time.time):
+    def __init__(self, status_source, primary, fallback, clock=time.time):
         self.status_source = status_source  # The backend's own get_status().
-        if fallback is None:
-            primary, fallback = default_engines(clock)
         self.primary, self.fallback = primary, fallback
         self.clock = clock
         self.cache = {}            # fingerprint -> (time, response)

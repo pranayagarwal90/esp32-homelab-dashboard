@@ -72,43 +72,65 @@ The project has three main components:
 └─────────────────────────────────────┘
 ```
 
+# Backend configuration
+
+The backend has no deployment-specific values in its source. Everything that
+depends on your network, location or machine is read by `backend/config.py`:
+
+```sh
+cp .env.example .env    # git-ignored; edit your values here
+python3 backend/server.py
+```
+
+- Priority: process environment (e.g. systemd `Environment=`) > `.env` in the
+  project root (`DASHBOARD_ENV_FILE` selects another file; blank = none) >
+  generic defaults.
+- Blank core settings (port, timezone, ...) use the default; blank optional
+  integrations (weather, host metrics, service URLs, primary AI) are disabled.
+- An invalid core setting (port, timezone, world clock, boolean) stops startup
+  with `Configuration error: ...`. An invalid optional integration (for
+  example a latitude outside -90..90, or only one coordinate) is disabled and
+  printed as a warning at startup.
+- `DASHBOARD_PHOTOS_DIR` may be absolute; a relative path is resolved from the
+  project root (default `./photos-ready`), never from the working directory.
+  The directory is created when missing.
+- `DASHBOARD_WORLD_CLOCKS` (`Label=Area/City,...`) adds clocks to
+  `/api/status`. The current firmware still shows only the `india`,
+  `singapore` and `london` keys; unconfigured ones are sent as `--:--`.
+  Fully configurable clocks need a later firmware/protocol change.
+
+See `.env.example` for every setting.
+
 # Service health checks
 
 The Services tab displays Jellyfin, Navidrome, Ollama, Cloudfare, NextCloud,
 Immich, and Technical Blog in that order. The `/api/status` services object
-retains its original seven boolean keys for older firmware and adds `nextcloud`,
-`immich`, and `technical_blog`. New firmware defaults missing keys to false.
+retains its original seven keys for older firmware and adds `nextcloud`,
+`immich`, and `technical_blog`. Each value is `true` (up), `false` (down) or
+`null` (no way to check it); the firmware shows `null` or a missing key as
+unknown (grey) and never raises an alert for it.
 
-## Verified deployment defaults (2026-10-02)
+## Health URLs
 
-These URLs were verified against local deployment configuration and read-only
-HTTP probes. They are specific to this homelab. Each returned HTTP 200.
-
-| Service | Default URL | Check / source |
-| --- | --- | --- |
-| Jellyfin | `http://192.168.1.13:8096/health` | 2xx; Windows `network.xml` port and [official health endpoint](https://jellyfin.org/docs/general/post-install/networking/advanced/monitoring/) |
-| Navidrome | `http://127.0.0.1:4533/ping` | 2xx; published port and installed Docker healthcheck |
-| Ollama | `http://127.0.0.1:11434/api/version` | 2xx plus nonempty version string; published port and [official API](https://github.com/ollama/ollama/blob/main/docs/api.md#version) |
-| NextCloud | `http://127.0.0.1:8080/status.php` | 2xx plus installed=true, maintenance=false, needsDbUpgrade=false; installed Docker healthcheck and observed JSON |
-| Immich | `http://127.0.0.1:2283/api/server/ping` | 2xx plus res=pong; published port and installed `immich-healthcheck` script |
-| Technical Blog | `http://192.168.1.13:8085/` | 2xx; live deployment runbook and Docker healthcheck; page availability, not exhaustive dependency health |
-| Cloudflare | None | Existing Docker fallback; tunnel has no published readiness port |
-
-The verified Compose files are under `/mnt/c/homeserver/compose/`.
-Jellyfin's port is recorded in
-`/mnt/c/ProgramData/Jellyfin/Server/config/network.xml`. Technical Blog's
-live URL is documented in the adjacent repository's
-`docs/live-deployment-runbook.md`. No external configurations were changed.
-Loopback URLs assume the API runs on the same WSL host as these published ports.
-
-Override a default in the backend process environment using
+There are no source defaults. Configure a check with
 `SERVICE_<NAME>_HEALTH_URL`, with uppercase names: `JELLYFIN`, `NAVIDROME`,
-`OLLAMA`, `NEXTCLOUD`, `IMMICH`, `TECHNICAL_BLOG`, or `CLOUDFLARE`.
-Legacy-only services support `SERVICE_METUBE_HEALTH_URL`,
-`SERVICE_BAZARR_HEALTH_URL`, and `SERVICE_MCP_HEALTH_URL`; they have no defaults
-and retain existing Docker detection when unconfigured. An explicitly blank
-variable disables its default URL and selects fallback. The new entries have
-no assumed container identities, so their fallback is false.
+`METUBE`, `OLLAMA`, `NEXTCLOUD`, `IMMICH`, `TECHNICAL_BLOG`, `CLOUDFLARE`,
+`BAZARR` or `MCP`. Service-specific checks:
+
+| Service | Typical URL | Healthy when |
+| --- | --- | --- |
+| Jellyfin | `http://<host>:8096/health` | 2xx and body `Healthy` ([official endpoint](https://jellyfin.org/docs/general/post-install/networking/advanced/monitoring/)) |
+| Navidrome | `http://<host>:4533/ping` | 2xx |
+| Ollama | `http://<host>:11434/api/version` | 2xx plus nonempty version string ([official API](https://github.com/ollama/ollama/blob/main/docs/api.md#version)) |
+| NextCloud | `http://<host>:8080/status.php` | 2xx plus installed=true, maintenance=false, needsDbUpgrade=false |
+| Immich | `http://<host>:2283/api/server/ping` | 2xx plus res=pong |
+| Others | any page | 2xx |
+
+Without a URL, and with `DOCKER_STATUS_ENABLED=true` (default), the legacy
+services (Jellyfin, Navidrome, MeTube, Bazarr, Ollama, Cloudflare, MCP) report
+up when a running container name contains the service name. NextCloud, Immich
+and Technical Blog have no assumed container identity, so without a URL they
+are `null`; with Docker status disabled, every service without a URL is `null`.
 
 Configured checks issue HTTP(S) GET without redirects or proxy environment
 variables. HTTPS verifies certificates. Custom authentication headers and URLs
@@ -119,8 +141,8 @@ missing fields, and unexpected payloads return false.
 
 Checks run concurrently with 0.5-second connection/read socket timeouts.
 This is a per-operation timeout, not a strict total deadline: DNS resolution
-and slowly delivered headers can take longer. The verified defaults use IP
-addresses. Existing metrics, Docker, and weather timeouts are unchanged.
+and slowly delivered headers can take longer; prefer IP addresses in health
+URLs. Existing metrics, Docker, and weather timeouts are unchanged.
 Cloudflare's container fallback proves only that its process is running,
 not that the tunnel is connected.
 
@@ -130,23 +152,24 @@ The installed `/etc/systemd/system/homelab-dashboard.service` points to a
 missing root-level `server.py`. The prepared
 `backend/homelab-dashboard.service.d/override.conf` corrects `ExecStart` to
 `backend/server.py`. The user installed it and restarted the API on 2026-10-02; the
-active service now executes `backend/server.py`. The `backend/photos-ready` link points to the existing root-level photo
-directory, preserving its contents and URL behavior. No photo logic was changed.
+active service now executes `backend/server.py`. Photos are served from
+`DASHBOARD_PHOTOS_DIR` (default `<project root>/photos-ready`, the same
+directory the former `backend/photos-ready` link pointed to).
 Review the existing runtime configuration before applying this override. Backend rollout is separate from
 firmware upload; `deploy-esp32.sh` is unchanged.
 
 Run isolated tests without contacting production:
 
 ```sh
-python3 -m py_compile backend/server.py backend/test_service_health.py
-python3 -m unittest discover -s backend -p 'test_service_health.py' -v
+python3 -m py_compile backend/*.py
+python3 -m unittest discover -s backend -p 'test_*.py'
 ```
 
 Deployment verification on 2026-10-02: the restarted API returned HTTP 200,
 all seven displayed services true, Windows metrics available, and 20 photos.
 An individual photo returned HTTP 200 with image/jpeg content type. The existing
 `./deploy-esp32.sh` workflow built both firmware copies and completed OTA to
-`192.168.1.18` with device result OK. The deployment script and Windows secrets
+the display with device result OK. The deployment script and Windows secrets
 file were unchanged. Physical screen rendering still requires a visual check.
 
 ## Automatic backlight brightness
@@ -413,9 +436,9 @@ answered (`"engine": "primary"` or `"fallback"`, shown as `AI - GPU` /
 | Measured | 0.2-0.6 s warm, ~3-15 s cold load | 1.9-4.7 s warm, ~23-25 s cold load |
 | Timeout | 8 s (model loaded) / 20 s (cold) | 15 s / 30 s |
 
-The laptop address is never in the source: set it in the service
+The primary address is never in the source: set it in `.env` or the service
 environment, for example in a systemd drop-in:
-`Environment=AI_PRIMARY_OLLAMA_URL=http://10.10.10.1:11434`.
+`Environment=AI_PRIMARY_OLLAMA_URL=http://<gpu-host>:11434`.
 (`AI_OLLAMA_URL` / `AI_OLLAMA_MODEL` still configure the fallback.)
 
 Routing: a cheap probe (`/api/tags` for the model, `/api/ps` for its load
@@ -459,7 +482,7 @@ RAM and disks to 5%); AGAIN bypasses it. Failures are not cached.
 
 **Troubleshooting.** `curl http://<homeserver>:8090/api/ai/status`;
 `docker ps | grep ollama`; `curl http://127.0.0.1:11434/api/tags` (and the
-laptop's `http://10.10.10.1:11434/api/tags` from the HomeServer) list the
+primary's `http://<gpu-host>:11434/api/tags` from the HomeServer) list the
 installed models. `primary_available: false` with the laptop on: check its
 `OLLAMA_HOST` and firewall rule for the HomeServer's link address. "AI model is not installed": install it yourself
 (`ollama pull llama3.2:3b`) or set `AI_OLLAMA_MODEL`. An Ollama outage only

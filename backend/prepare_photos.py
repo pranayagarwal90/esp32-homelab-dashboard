@@ -1,16 +1,19 @@
 from pathlib import Path
 from PIL import Image, ImageOps
 
+import config
+
 BASE_DIR = Path(__file__).resolve().parent
 SOURCE_DIR = BASE_DIR / "photos-source"
-OUTPUT_DIR = BASE_DIR / "photos-ready"
+# Where the API serves photos from (DASHBOARD_PHOTOS_DIR).
+OUTPUT_DIR = config.load().photos_dir
 
 TARGET_SIZE = (320, 240)
 JPEG_QUALITY = 72
 MAX_RECOMMENDED_BYTES = 120_000
 
 SOURCE_DIR.mkdir(exist_ok=True)
-OUTPUT_DIR.mkdir(exist_ok=True)
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 extensions = {".jpg", ".jpeg", ".png", ".webp"}
 files = sorted(

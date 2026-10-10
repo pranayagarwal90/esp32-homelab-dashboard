@@ -1,6 +1,8 @@
 # Local/private photos
 photos-source/
 photos-ready/
+# Former tracked link to ../photos-ready; the API now uses DASHBOARD_PHOTOS_DIR.
+backend/photos-ready
 
 # Local backups
 *.backup-*
@@ -9,26 +11,34 @@ photos-ready/
 # Windows metadata
 *:Zone.Identifier
 
-# Python cache
+# Python cache and test output
 __pycache__/
 *.pyc
 *.pyo
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Generated caches
+backend/radar-cache/
 
 # Virtual environments
 .venv/
 venv/
 
-# Local environment/secrets
+# Local environment/secrets (copy .env.example to .env)
 .env
 .env.*
+!.env.example
+deploy.local.env
 secrets.*
 
 # ESP32 secrets
 firmware/include/secrets.h
 
-# PlatformIO build output
+# PlatformIO build output and local overrides (upload port, OTA address)
 firmware/.pio/
 firmware/.vscode/
 !firmware/include/secrets.example.h
 .venv-platformio/
-.venv-platformio/
+platformio_override.ini

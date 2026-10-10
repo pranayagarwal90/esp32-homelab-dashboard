@@ -128,7 +128,7 @@ static void testParsing() {
   aiParseResponse(cpu, strlen(cpu), 200, r);
   aiFooterLabel(r, footer, sizeof(footer));
   assert(r.engine == AiEngine::Fallback && strcmp(footer, "AI - CPU (CACHED)") == 0);
-  const char* odd = "{\"available\":true,\"title\":\"t\",\"summary\":\"s\",\"engine\":\"10.10.10.1\"}";
+  const char* odd = "{\"available\":true,\"title\":\"t\",\"summary\":\"s\",\"engine\":\"192.0.2.1\"}";
   aiParseResponse(odd, strlen(odd), 200, r);
   assert(r.engine == AiEngine::Unknown);
 

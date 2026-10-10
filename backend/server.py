@@ -7,23 +7,23 @@ from urllib.parse import unquote, urlencode, urlsplit
 from urllib.request import urlopen
 from zoneinfo import ZoneInfo
 import json
-import os
 import subprocess
 import time
 
-from ai_assistant import AiAssistant, RequestError
+from ai_assistant import AiAssistant, RequestError, default_engines
+import config
 
-BASE_DIR = Path(__file__).resolve().parent
-PHOTOS_DIR = BASE_DIR / "photos-ready"
+# All deployment-specific values (location, addresses, paths) come from
+# config: the process environment, then an optional .env, then generic defaults.
+try:
+    CONFIG = config.load()
+except config.ConfigError as error:
+    raise SystemExit(f"Configuration error: {error}") from None
 
-WINDOWS_METRICS_URL = "http://192.168.1.13:9183/"
 HOST_METRICS_CACHE_SECONDS = 2
 
-WEATHER_LAT = 39.04
-WEATHER_LON = -77.49
 WEATHER_CACHE_SECONDS = 900
 WEATHER_HOURLY_MAX = 8
-LOCAL_TIMEZONE = "America/New_York"
 
 _weather_cache = None
 _weather_cache_time = 0
@@ -42,12 +42,15 @@ def bytes_to_gb(value):
 def get_windows_metrics():
     global _host_cache, _host_cache_time
 
+    if not CONFIG.host_metrics_url:
+        return host_unavailable("host metrics not configured")
+
     now = time.time()
     if _host_cache and now - _host_cache_time < HOST_METRICS_CACHE_SECONDS:
         return _host_cache
 
     try:
-        with urlopen(WINDOWS_METRICS_URL, timeout=3) as response:
+        with urlopen(CONFIG.host_metrics_url, timeout=3) as response:
             raw = json.loads(response.read())
 
         memory = raw.get("memory", {})
@@ -79,7 +82,7 @@ def get_windows_metrics():
 
         result = {
             "available": True,
-            "hostname": raw.get("hostname", "HOMESERVER"),
+            "hostname": raw.get("hostname", CONFIG.host_label),
             "uptime_hours": round(float(raw.get("uptimeSeconds") or 0) / 3600, 1),
             "cpu": {
                 "percent": round(float(raw.get("cpu", {}).get("usagePercent") or 0), 1),
@@ -124,34 +127,47 @@ def get_windows_metrics():
             stale["error"] = str(e)
             return stale
 
-        return {
+        return host_unavailable(str(e))
+
+
+def host_unavailable(error):
+    """The host block when metrics are disabled or have never been read."""
+    return {
+        "available": False,
+        "hostname": CONFIG.host_label,
+        "uptime_hours": 0,
+        "cpu": {"percent": 0},
+        "memory": {"used_gb": 0, "total_gb": 0, "free_gb": 0, "percent": 0},
+        "disks": [],
+        "gpu": {"name": "", "vendor": "", "percent": 0},
+        "wifi": {
             "available": False,
-            "hostname": "HOMESERVER",
-            "uptime_hours": 0,
-            "cpu": {"percent": 0},
-            "memory": {"used_gb": 0, "total_gb": 0, "free_gb": 0, "percent": 0},
-            "disks": [],
-            "gpu": {"name": "", "vendor": "", "percent": 0},
-            "wifi": {
-                "available": False,
-                "name": "",
-                "link_mbps": 0,
-                "receive_mbps": 0,
-                "send_mbps": 0,
-                "signal_percent": None,
-            },
-            "ethernet": {
-                "available": False,
-                "name": "",
-                "link_mbps": 0,
-                "receive_mbps": 0,
-                "send_mbps": 0,
-            },
-            "error": str(e),
-        }
+            "name": "",
+            "link_mbps": 0,
+            "receive_mbps": 0,
+            "send_mbps": 0,
+            "signal_percent": None,
+        },
+        "ethernet": {
+            "available": False,
+            "name": "",
+            "link_mbps": 0,
+            "receive_mbps": 0,
+            "send_mbps": 0,
+        },
+        "error": error,
+    }
 
 
 def docker_status():
+    if not CONFIG.docker_status_enabled:
+        return {
+            "available": False,
+            "running": 0,
+            "containers": [],
+            "error": "docker status disabled",
+        }
+
     try:
         result = subprocess.run(
             ["docker", "ps", "--format", "{{.Names}}|{{.Status}}"],
@@ -197,18 +213,9 @@ def docker_status():
 
 
 SERVICE_HEALTH_TIMEOUT_SECONDS = 0.5
-# Verified against this homelab's published ports and read-only HTTP probes.
-# Environment variables below can override these deployment-specific defaults.
-DEFAULT_SERVICE_HEALTH_URLS = {
-    "jellyfin": "http://192.168.1.13:8096/health",
-    "navidrome": "http://127.0.0.1:4533/ping",
-    # Published 8084 -> 8081; installed MeTube healthcheck requests /.
-    "metube": "http://127.0.0.1:8084/",
-    "ollama": "http://127.0.0.1:11434/api/version",
-    "nextcloud": "http://127.0.0.1:8080/status.php",
-    "immich": "http://127.0.0.1:2283/api/server/ping",
-    "technical_blog": "http://192.168.1.13:8085/",
-}
+# Health URLs come only from config (SERVICE_<NAME>_HEALTH_URL); there are no
+# source defaults. Without a URL, a running Docker container whose name
+# contains one of these terms is the fallback.
 SERVICE_MATCH_TERMS = {
     "jellyfin": ("jellyfin",),
     "navidrome": ("navidrome",),
@@ -283,18 +290,18 @@ def service_status(docker):
         )
 
     services = {}
-    # No assumed hosts or ports. Configure only operator-verified health URLs.
+    # True/False for a configured check (URL, else Docker name match); None
+    # when there is no way to check: the firmware shows unknown, never down.
     with ThreadPoolExecutor(max_workers=len(SERVICE_MATCH_TERMS)) as executor:
         checks = {}
         for name, terms in SERVICE_MATCH_TERMS.items():
-            url = os.environ.get(
-                f"SERVICE_{name.upper()}_HEALTH_URL",
-                DEFAULT_SERVICE_HEALTH_URLS.get(name, ""),
-            ).strip()
+            url = CONFIG.service_urls.get(name, "")
             if url:
                 checks[name] = executor.submit(check_service_http, url, name)
-            else:
+            elif CONFIG.docker_status_enabled and terms:
                 services[name] = any_match(*terms)
+            else:
+                services[name] = None
         for name, check in checks.items():
             try:
                 services[name] = bool(check.result())
@@ -303,16 +310,19 @@ def service_status(docker):
     return services
 
 
+# World-clock keys the current firmware reads by name (StatusClient.cpp).
+# Until world clocks are data-driven there, each one that is not configured
+# is sent as a "--:--" placeholder so the clocks page never shows garbage.
+LEGACY_CLOCK_KEYS = ("india", "singapore", "london")
+
+
 def get_times():
-    zones = {
-        "local": LOCAL_TIMEZONE,
-        "india": "Asia/Kolkata",
-        "singapore": "Asia/Singapore",
-        "london": "Europe/London",
-    }
+    zones = {"local": (None, CONFIG.timezone)}
+    for clock in CONFIG.world_clocks:
+        zones[clock.key] = (clock.label, clock.zone)
 
     result = {}
-    for name, timezone_name in zones.items():
+    for name, (label, timezone_name) in zones.items():
         now = datetime.now(ZoneInfo(timezone_name))
         result[name] = {
             "time": now.strftime("%-I:%M %p"),
@@ -322,6 +332,11 @@ def get_times():
             "month": now.month,
             "day": now.day,
         }
+        if label:
+            result[name]["label"] = label
+
+    for name in LEGACY_CLOCK_KEYS:
+        result.setdefault(name, {"time": "--:--", "date": "", "timezone": None})
 
     return result
 
@@ -356,7 +371,7 @@ def weather_description(code):
 def solar_times(daily):
     """Isolate optional solar parsing so a bad field cannot break weather."""
     try:
-        zone = ZoneInfo(LOCAL_TIMEZONE)
+        zone = ZoneInfo(CONFIG.timezone)
         day = datetime.fromisoformat(daily["time"][0]).date()
         start = datetime.combine(day, datetime_time.min, zone)
         end = datetime.combine(day + timedelta(days=1), datetime_time.min, zone)
@@ -427,7 +442,7 @@ def hourly_source(hourly):
     skipped; a bad block yields an empty list."""
     entries = []
     try:
-        zone = ZoneInfo(LOCAL_TIMEZONE)
+        zone = ZoneInfo(CONFIG.timezone)
         times = hourly["time"]
         temps = hourly["temperature_2m"]
         chances = hourly.get("precipitation_probability") or []
@@ -461,7 +476,7 @@ def weather_payload(weather, now):
     source = weather.get("_hourly")
     if not source:
         return payload
-    zone = ZoneInfo(LOCAL_TIMEZONE)
+    zone = ZoneInfo(CONFIG.timezone)
     upcoming = [entry for entry in source if entry[0] + 3600 > now][:WEATHER_HOURLY_MAX]
     hourly = []
     for epoch, temp, chance, code in upcoming:
@@ -480,24 +495,28 @@ def weather_payload(weather, now):
 def get_weather():
     global _weather_cache, _weather_cache_time, _weather_cache_day
 
+    if CONFIG.weather_location is None:
+        return {"available": False, "error": "weather not configured"}
+
     now = time.time()
-    local_day = datetime.fromtimestamp(now, ZoneInfo(LOCAL_TIMEZONE)).date()
+    local_day = datetime.fromtimestamp(now, ZoneInfo(CONFIG.timezone)).date()
     if (_weather_cache and now - _weather_cache_time < WEATHER_CACHE_SECONDS
             and _weather_cache_day == local_day):
         return _weather_cache
 
     try:
+        latitude, longitude = CONFIG.weather_location
         params = urlencode(
             {
-                "latitude": WEATHER_LAT,
-                "longitude": WEATHER_LON,
+                "latitude": latitude,
+                "longitude": longitude,
                 "current": ("temperature_2m,apparent_temperature,relative_humidity_2m,"
                             "precipitation,weather_code,wind_speed_10m"),
                 "hourly": "temperature_2m,precipitation_probability,weather_code",
                 "daily": ("temperature_2m_max,temperature_2m_min,sunrise,sunset,"
                           "precipitation_probability_max"),
                 "temperature_unit": "celsius",
-                "timezone": LOCAL_TIMEZONE,
+                "timezone": CONFIG.timezone,
                 "forecast_days": 2,
             }
         )
@@ -534,11 +553,22 @@ def get_weather():
         return {"available": False, "error": str(e)}
 
 
+def ensure_photos_dir():
+    """Creates the photo directory when missing. Returns the reason it is
+    unusable (e.g. a file or a dangling link at that path), or None."""
+    try:
+        CONFIG.photos_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as error:
+        return f"{CONFIG.photos_dir}: {error.strerror or error}"
+    return None
+
+
 def list_photos():
-    PHOTOS_DIR.mkdir(exist_ok=True)
+    if ensure_photos_dir():
+        return []
     return sorted(
         p.name
-        for p in PHOTOS_DIR.iterdir()
+        for p in CONFIG.photos_dir.iterdir()
         if p.is_file() and p.suffix.lower() in {".jpg", ".jpeg"}
     )
 
@@ -548,7 +578,7 @@ def get_status():
     docker = docker_status()
 
     return {
-        "hostname": host.get("hostname", "HOMESERVER"),
+        "hostname": host.get("hostname", CONFIG.host_label),
         "host_available": host.get("available", False),
         "uptime_hours": host.get("uptime_hours", 0),
         "cpu": host.get("cpu", {"percent": 0}),
@@ -566,7 +596,7 @@ def get_status():
 
 
 # Read-only AI explanations from local Ollama; context from get_status().
-AI = AiAssistant(lambda: get_status())
+AI = AiAssistant(lambda: get_status(), *default_engines(CONFIG.ai))
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -594,7 +624,7 @@ class Handler(BaseHTTPRequestHandler):
 
         if self.path.startswith("/photos/"):
             filename = Path(unquote(self.path[len("/photos/"):])).name
-            photo = PHOTOS_DIR / filename
+            photo = CONFIG.photos_dir / filename
 
             if (
                 not filename
@@ -639,12 +669,23 @@ class Handler(BaseHTTPRequestHandler):
 
 if __name__ == "__main__":
     # Threaded: a slow AI request never holds up /api/status.
-    server = ThreadingHTTPServer(("0.0.0.0", 8090), Handler)
+    server = ThreadingHTTPServer((CONFIG.bind, CONFIG.port), Handler)
     server.daemon_threads = True
     print("Homelab Dashboard API")
-    print("Listening on 0.0.0.0:8090")
-    print("Windows metrics:", WINDOWS_METRICS_URL)
+    print(f"Listening on {CONFIG.bind}:{CONFIG.port}")
+    print("Config file:", CONFIG.env_file or "none (environment and defaults)")
+    print("Timezone:", CONFIG.timezone)
+    print("Weather:", "configured" if CONFIG.weather_location else "disabled")
+    print("Host metrics:", CONFIG.host_metrics_url or "disabled")
+    print("Docker status:", "enabled" if CONFIG.docker_status_enabled else "disabled")
+    print("Service checks:", ", ".join(sorted(CONFIG.service_urls)) or "none configured")
+    photos_problem = ensure_photos_dir()
+    print("Photos:", CONFIG.photos_dir, f"(unusable: {photos_problem})" if photos_problem else "")
     print("AI primary:", f"{AI.primary.model} (configured)" if AI.primary else "not configured")
     print("AI fallback:", AI.fallback.model)
+    for name in sorted(set(CONFIG.service_urls) - set(SERVICE_MATCH_TERMS)):
+        print(f"Warning: SERVICE_{name.upper()}_HEALTH_URL is not a known service; ignored")
+    for warning in CONFIG.warnings:
+        print("Warning:", warning)
     print("Endpoints: /api/status, /api/photos, /photos/<file>, /api/ai/status, POST /api/ai/explain")
     server.serve_forever()
