@@ -2,6 +2,7 @@
 #include <Preferences.h>
 #include "DeviceConfig.h"
 #include "DevDefaults.h"
+#include "SettingsStore.h"
 #include "ProvisioningLogic.h"
 
 static const char* DEVICE_NAMESPACE = "device";
@@ -13,7 +14,7 @@ static bool backendStored = false;
 void loadDeviceConfig() {
   char stored[BACKEND_URL_MAX] = "";
   Preferences prefs;
-  if (prefs.begin(DEVICE_NAMESPACE, true)) {
+  if (nvsNamespaceExists(DEVICE_NAMESPACE) && prefs.begin(DEVICE_NAMESPACE, true)) {
     backendStored = prefs.isKey(BACKEND_KEY);
     // An overlong value reads as "" and is treated as invalid.
     if (backendStored) prefs.getString(BACKEND_KEY, stored, sizeof(stored));

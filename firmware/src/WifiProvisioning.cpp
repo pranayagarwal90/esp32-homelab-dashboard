@@ -3,6 +3,7 @@
 #include <WebServer.h>
 #include <DNSServer.h>
 #include <HTTPClient.h>
+#include <esp_wifi.h>
 #include <freertos/queue.h>
 #include "WifiProvisioning.h"
 #include "DeviceConfig.h"
@@ -15,7 +16,6 @@ static constexpr uint32_t CLOSE_AFTER_SUCCESS_MS = 20000;
 static constexpr uint32_t RESTART_DELAY_MS = 8000;      // Time to read the result.
 static constexpr uint16_t SERVER_CHECK_TIMEOUT_MS = 3000;
 static constexpr uint32_t SETUP_STACK_BYTES = 6144;
-static constexpr int MAX_SCANNED = 12;
 
 // A validated submission (setup task -> main task, one queue slot).
 struct SetupSubmission {
@@ -54,9 +54,20 @@ static bool pendingBackendChanged = false;
 static WebServer server(80);
 static DNSServer dns;
 static bool routesRegistered = false;
-static char scanned[MAX_SCANNED][33];
-static int scannedCount = 0;
-static bool scanRunning = false;
+static ScannedNetwork networks[SETUP_SCAN_MAX]; // Strongest first (ProvisioningLogic).
+static int networkCount = 0;
+static ScanMachine scan;           // ProvisioningLogic: delay, running, done, timeout.
+static bool scanDone = false;      // A scan completed (finding nothing is a result).
+static bool scanFailed = false;    // The last scan failed or timed out.
+// Set by the driver's scan-done event (Arduino event task), read by the setup task.
+static volatile bool scanDoneEvent = false;
+static volatile bool scanDoneOk = false;
+static bool scanEventRegistered = false; // Main task, once.
+// The last submission's network and server, re-filled after a failure or a
+// rejected form (never the password).
+static char formSsid[33] = "";
+static char formBackend[BACKEND_URL_MAX] = "";
+static bool formFilled = false;
 
 static void setTarget(const char* ssid) {
   portENTER_CRITICAL(&targetLock);
@@ -112,7 +123,11 @@ static void appendStatus(String& page) {
   switch (phase) {
     case WifiSetupPhase::Connecting: page += "<p><b>Connecting to "; break;
     case WifiSetupPhase::Connected: page += "<p><b>Connected to "; break;
-    case WifiSetupPhase::Failed: page += "<p class=err><b>Could not join "; break;
+    case WifiSetupPhase::Failed:
+      page += "<p class=err><b>Could not connect to &quot;";
+      page += htmlEscape(ssid);
+      page += "&quot;. Check the password or signal and try again. Nothing was saved.</b></p>";
+      return;
     case WifiSetupPhase::Restarting:
       page += "<p><b>Saved. The display is restarting.";
       page += serverCheckText();
@@ -126,29 +141,96 @@ static void appendStatus(String& page) {
   page += "</b></p>";
 }
 
-static void startScan() {
-  if (WiFi.scanNetworks(true, false) == WIFI_SCAN_RUNNING) scanRunning = true;
+static const char* methodName() {
+  switch (server.method()) {
+    case HTTP_GET: return "GET";
+    case HTTP_POST: return "POST";
+    case HTTP_HEAD: return "HEAD";
+    default: return "OTHER";
+  }
 }
 
-static void collectScan() {
-  if (!scanRunning) return;
-  int16_t found = WiFi.scanComplete();
-  if (found == WIFI_SCAN_RUNNING) return;
-  scanRunning = false;
-  scannedCount = 0;
-  for (int i = 0; i < found && scannedCount < MAX_SCANNED; i++) {
+static const char* wifiModeText() {
+  wifi_mode_t mode = WiFi.getMode();
+  return mode == WIFI_MODE_APSTA ? "AP+STA" : mode == WIFI_MODE_AP ? "AP" : mode == WIFI_MODE_STA ? "STA" : "OFF";
+}
+
+// Starts an async scan with a fully initialized configuration (the Arduino
+// wrapper leaves home_chan_dwell_time unset). Same timing as the wrapper's
+// defaults: active, 100-300 ms per channel, hidden networks skipped.
+static bool beginScan() {
+  if (!(WiFi.getMode() & WIFI_MODE_STA)) {
+    Serial.printf("[SETUP] Scan not started: Wi-Fi mode %s has no station\n", wifiModeText());
+    return false;
+  }
+  WiFi.scanDelete(); // Frees the previous results; the cached list is separate.
+  scanDoneEvent = false;
+  wifi_scan_config_t config;
+  memset(&config, 0, sizeof(config));
+  config.show_hidden = false;
+  config.scan_type = WIFI_SCAN_TYPE_ACTIVE;
+  config.scan_time.active.min = 100;
+  config.scan_time.active.max = 300;
+  config.home_chan_dwell_time = 30; // Back on the hotspot's channel between channels.
+  esp_err_t err = esp_wifi_scan_start(&config, false);
+  if (err != ESP_OK) {
+    Serial.printf("[SETUP] Scan not started: %s; Refresh retries, manual entry still works\n",
+                  esp_err_to_name(err));
+    return false;
+  }
+  Serial.printf("[SETUP] Starting async network scan (mode %s)\n", wifiModeText());
+  Serial.println("[SETUP] scanComplete -> RUNNING");
+  return true;
+}
+
+static void collectScan(bool ok) {
+  if (!ok) {
+    Serial.println("[SETUP] scanComplete -> FAILED (driver reported a failed scan); keeping the previous list");
+    scanFailed = true;
+    WiFi.scanDelete();
+    return;
+  }
+  int16_t found = WiFi.scanComplete(); // Results were copied by the scan-done event.
+  if (found < 0) found = 0;
+  networkCount = 0;
+  for (int i = 0; i < found; i++) {
     String ssid = WiFi.SSID(i);
-    if (ssid.length() == 0 || ssid.length() > 32) continue;
-    bool duplicate = false;
-    for (int j = 0; j < scannedCount; j++) duplicate |= ssid == scanned[j];
-    if (duplicate) continue;
-    strcpy(scanned[scannedCount++], ssid.c_str());
+    networkCount = addScannedNetwork(networks, networkCount, SETUP_SCAN_MAX, ssid.c_str(), ssid.length(),
+                                     WiFi.RSSI(i), WiFi.encryptionType(i) == WIFI_AUTH_OPEN);
   }
   WiFi.scanDelete();
+  scanDone = true;
+  scanFailed = false;
+  Serial.printf("[SETUP] scanComplete -> %d networks (%d listed)\n", found, networkCount);
 }
 
-// The form; error, ssid and backend re-fill it after a rejected submission
-// (the password is never echoed).
+// Setup task, every pass: logs only state changes.
+static void serviceScan() {
+  WifiSetupPhase current = phase;
+  bool joining = current == WifiSetupPhase::Connecting || current == WifiSetupPhase::Restarting;
+  bool done = scanDoneEvent;
+  switch (scanStep(scan, millis(), done, joining)) {
+    case ScanAction::Start:
+      scanStarted(scan, beginScan(), millis());
+      break;
+    case ScanAction::Collect:
+      scanDoneEvent = false;
+      collectScan(scanReplacesList(ScanAction::Collect, scanDoneOk));
+      break;
+    case ScanAction::Timeout:
+      Serial.println("[SETUP] scanComplete -> FAILED (no result in time); keeping the previous list");
+      esp_wifi_scan_stop();
+      WiFi.scanDelete();
+      scanFailed = true;
+      break;
+    case ScanAction::None:
+      break;
+  }
+}
+
+// The form; error, ssid and backend re-fill it after a rejected or failed
+// submission (the password is never echoed). A listed ssid is pre-selected in
+// the dropdown, any other one is put in the typed field.
 static void sendForm(int code, const char* error, const char* ssid, const char* backend) {
   String page = FPSTR(PAGE_HEAD);
   appendStatus(page);
@@ -157,53 +239,88 @@ static void sendForm(int code, const char* error, const char* ssid, const char* 
     page += htmlEscape(error);
     page += "</b></p>";
   }
-  page += "<form method=post action=/save><label>Wi-Fi network name"
-          "<input name=ssid list=nets maxlength=32 autocomplete=off value=\"";
-  page += htmlEscape(ssid);
-  page += haveNetwork ? "\" placeholder=\"Leave blank to keep the current network\">" : "\" required>";
-  page += "</label><datalist id=nets>";
-  for (int i = 0; i < scannedCount; i++) {
+  int listed = findScannedNetwork(networks, networkCount, ssid, strlen(ssid));
+  page += "<form method=post action=/save><label>Wi-Fi network<select name=net><option value=\"\">";
+  page += networkCount ? (haveNetwork ? "Keep the current network" : "Choose a network")
+          : scanBusy(scan) ? "Scanning... use Refresh networks"
+          : scanFailed ? "Scan failed: Refresh, or type a name below" : "No networks found: type one below";
+  page += "</option>";
+  for (int i = 0; i < networkCount; i++) {
     page += "<option value=\"";
-    page += htmlEscape(scanned[i]);
-    page += "\">";
+    page += htmlEscape(networks[i].ssid);
+    page += i == listed ? "\" selected>" : "\">";
+    page += htmlEscape(networks[i].ssid);
+    page += " - ";
+    page += signalLabel(networks[i].rssi);
+    page += networks[i].open ? ", open" : "";
+    page += "</option>";
   }
-  page += "</datalist><label>Wi-Fi password (blank for an open network)"
-          "<input name=pass type=password maxlength=63></label>"
+  page += "</select></label><label>Or type a network name (hidden or not listed)"
+          "<input name=ssid maxlength=32 autocomplete=off autocapitalize=off autocorrect=off "
+          "spellcheck=false value=\"";
+  page += listed < 0 ? htmlEscape(ssid) : String();
+  page += "\"></label><label>Wi-Fi password (blank for an open network)"
+          "<input name=pass type=password maxlength=63 autocomplete=off></label>"
           "<label>Dashboard Server<input name=server required maxlength=127 inputmode=url "
           "autocapitalize=off autocorrect=off spellcheck=false placeholder=\"http://192.168.1.50:8090\" value=\"";
   page += htmlEscape(backend);
   page += "\"></label><small>Enter the address of the Homelab Dashboard backend, "
           "for example http://192.168.1.50:8090 (no /api/status).</small>"
           "<button>Save and connect</button></form><p>";
-  page += scanRunning ? "Scanning for networks..." : "<a href=/?rescan=1>Rescan networks</a>";
+  page += scanBusy(scan) ? "Scanning for networks... <a href=/>reload</a> in a few seconds."
+                      : "<a href=/?rescan=1>Refresh networks</a>";
   page += "</p></body></html>";
   server.send(code, "text/html", page);
 }
 
 static void handleRoot() {
   lastRequestMs = millis();
-  if (server.hasArg("rescan")) startScan();
-  sendForm(200, nullptr, "", backendUrl());
+  Serial.printf("[SETUP] %s %s -> setup page\n", methodName(), server.uri().c_str());
+  if (server.hasArg("rescan")) {
+    if (scanRequest(scan)) Serial.println("[SETUP] Refresh: network scan requested");
+    else Serial.println("[SETUP] Refresh ignored: a scan is already running");
+  }
+  sendForm(200, nullptr, formFilled ? formSsid : "", formFilled ? formBackend : backendUrl());
+}
+
+static void rememberForm(const char* ssid, size_t ssidLength, const char* backend) {
+  size_t n = ssidLength < sizeof(formSsid) ? ssidLength : sizeof(formSsid) - 1;
+  memcpy(formSsid, ssid, n);
+  formSsid[n] = '\0';
+  snprintf(formBackend, sizeof(formBackend), "%s", backend);
+  formFilled = true;
 }
 
 static void handleSave() {
   lastRequestMs = millis();
-  String ssid = server.arg("ssid");
+  String typed = server.arg("ssid");
+  String selected = server.arg("net");
   String pass = server.arg("pass");
   String backend = server.arg("server");
+  size_t ssidLength = 0;
+  const char* ssid = chooseSetupSsid(typed.c_str(), typed.length(), selected.c_str(), selected.length(),
+                                     ssidLength);
+  int listed = findScannedNetwork(networks, networkCount, ssid, ssidLength);
+  // Never the password, only whether one was given.
+  Serial.printf("[SETUP] POST /save: network \"%.*s\" (%s), password %s, server \"%s\"\n", int(ssidLength),
+                ssid, typed.length() ? "typed" : ssidLength ? "from the list" : "keep current",
+                pass.length() ? "given" : "blank", backend.c_str());
   SetupForm form;
-  SetupFormError error = validateSetupForm(ssid.c_str(), ssid.length(), pass.length(), backend.c_str(),
-                                           haveNetwork, form);
+  SetupFormError error = validateSetupForm(ssid, ssidLength, pass.length(), backend.c_str(), haveNetwork, form,
+                                           listed >= 0 && !networks[listed].open);
+  Serial.printf("[SETUP] Validation: %s\n", error == SetupFormError::None ? "OK"
+                : setupFormErrorText(error, form.backendError));
+  rememberForm(ssid, ssidLength, backend.c_str());
   if (error != SetupFormError::None) {
     pass = "";
-    sendForm(400, setupFormErrorText(error, form.backendError), ssid.c_str(), backend.c_str());
+    sendForm(400, setupFormErrorText(error, form.backendError), formSsid, backend.c_str());
     return;
   }
   SetupSubmission submission;
   memset(&submission, 0, sizeof(submission));
   submission.changeWifi = form.changeWifi;
   if (form.changeWifi) {
-    memcpy(submission.wifi.ssid, ssid.c_str(), ssid.length());
+    memcpy(submission.wifi.ssid, ssid, ssidLength);
     memcpy(submission.wifi.password, pass.c_str(), pass.length());
   }
   memcpy(submission.backend, form.backend, sizeof(submission.backend));
@@ -214,9 +331,9 @@ static void handleSave() {
   String page = FPSTR(PAGE_HEAD);
   if (form.changeWifi) {
     page += "<p>Connecting to <b>";
-    page += htmlEscape(ssid.c_str());
-    page += "</b>. Watch the dashboard screen for the result.</p><p>This hotspot may drop "
-            "briefly while the display changes networks. Reconnect to it and "
+    page += htmlEscape(formSsid);
+    page += "</b>. Watch the dashboard screen for the result (up to 20 seconds).</p><p>This hotspot "
+            "may drop briefly while the display tries the network. Reconnect to it and "
             "<a href=/>reload</a> to see the status.</p></body></html>";
   } else {
     page += "<p>Saving. Watch the dashboard screen; it restarts if the dashboard server "
@@ -226,34 +343,55 @@ static void handleSave() {
 }
 
 static void handleRedirect() {
+  Serial.printf("[SETUP] %s %s -> redirect to the setup page\n", methodName(), server.uri().c_str());
   server.sendHeader("Location", String("http://") + WiFi.softAPIP().toString() + "/", true);
   server.send(302, "text/plain", "");
 }
+
+// Catch-all for captive-portal probes (e.g. iOS /hotspot-detect.html) and any
+// other URI: redirects to the setup page. Registered after "/" and "/save",
+// which therefore always match first (handlers are tried in order). As a
+// real handler it also avoids the WebServer's "request handler not found"
+// error log that onNotFound() requests produce.
+class RedirectEverything : public RequestHandler {
+public:
+  bool canHandle(HTTPMethod, String) override { return true; }
+  bool handle(WebServer&, HTTPMethod, String) override {
+    handleRedirect();
+    return true;
+  }
+};
 
 static void setupTask(void*) {
   if (!routesRegistered) {
     server.on("/", HTTP_GET, handleRoot);
     server.on("/save", HTTP_POST, handleSave);
-    server.onNotFound(handleRedirect);
+    server.addHandler(new RedirectEverything()); // Last: never shadows the routes above.
     routesRegistered = true;
   }
   dns.start(53, "*", WiFi.softAPIP());
   server.begin();
-  startScan();
+  // The first scan starts SETUP_SCAN_START_DELAY_MS after the hotspot, without blocking.
+  scanBegin(scan, millis());
+  Serial.printf("[SETUP] Wi-Fi mode: %s; AP active: %s (%s)\n", wifiModeText(),
+                WiFi.getMode() & WIFI_MODE_AP ? "yes" : "no", WiFi.softAPIP().toString().c_str());
   while (!stopRequested) {
     dns.processNextRequest();
     server.handleClient();
-    collectScan();
+    serviceScan();
     vTaskDelay(pdMS_TO_TICKS(5));
   }
   server.stop();
   dns.stop();
-  if (scanRunning) {
-    // Let an in-flight scan finish before freeing its results.
-    for (int i = 0; i < 100 && WiFi.scanComplete() == WIFI_SCAN_RUNNING; i++) vTaskDelay(pdMS_TO_TICKS(50));
-    WiFi.scanDelete();
-    scanRunning = false;
+  if (scan.state == ScanState::Running) {
+    // Stop the scan; the driver then frees its records (and the done event
+    // copies whatever it found), so wait briefly for that before freeing.
+    esp_wifi_scan_stop();
+    for (int i = 0; i < 20 && !scanDoneEvent; i++) vTaskDelay(pdMS_TO_TICKS(10));
+    scanStarted(scan, false, millis());
+    scan.state = ScanState::Idle;
   }
+  WiFi.scanDelete();
   taskRunning = false;
   vTaskDelete(nullptr);
 }
@@ -285,9 +423,11 @@ static bool serverAnswers(const char* base) {
   http.setTimeout(SERVER_CHECK_TIMEOUT_MS);
   http.setReuse(false);
   http.useHTTP10(true);
+  Serial.printf("[BACKEND] Checking %s\n", url);
   if (!http.begin(client, url)) return false;
   int code = http.GET();
   http.end();
+  Serial.printf("[BACKEND] Check result: %d (%s)\n", code, code == HTTP_CODE_OK ? "answered" : "no answer");
   return code == HTTP_CODE_OK;
 }
 
@@ -295,16 +435,25 @@ static bool serverAnswers(const char* base) {
 // or report that nothing changed.
 static void applySubmission() {
   if (!setupNeedsRestart(firstRunMode, pendingBackendChanged)) {
+    Serial.println("[SETUP] Nothing changed; no restart");
     setPhase(WifiSetupPhase::NoChange);
     return;
   }
-  if ((pendingBackendChanged || !hasBackendUrl()) && !saveBackendUrl(pendingBackend)) {
-    Serial.println("Could not store the backend URL");
-    setPhase(WifiSetupPhase::SaveFailed);
-    return;
+  if (pendingBackendChanged || !hasBackendUrl()) {
+    if (!saveBackendUrl(pendingBackend)) {
+      Serial.println("[BACKEND] URL NOT saved (NVS write failed); no restart");
+      setPhase(WifiSetupPhase::SaveFailed);
+      return;
+    }
+    Serial.printf("[BACKEND] URL saved: %s\n", pendingBackend);
+  } else {
+    Serial.println("[BACKEND] URL unchanged");
   }
   serverCheck = WiFi.status() != WL_CONNECTED ? ServerCheck::NotChecked
                 : serverAnswers(pendingBackend) ? ServerCheck::Reachable : ServerCheck::NotReachable;
+  if (serverCheck == ServerCheck::NotChecked) Serial.println("[BACKEND] Check skipped: Wi-Fi not connected");
+  Serial.printf("[SETUP] Restarting in %lu s (%s)\n", (unsigned long)(RESTART_DELAY_MS / 1000),
+                firstRunMode ? "first run" : "server changed");
   restartAt = millis();
   setPhase(WifiSetupPhase::Restarting);
 }
@@ -312,12 +461,22 @@ static void applySubmission() {
 bool startWifiSetup(bool firstRun) {
   if (wifiSetupRunning()) return true;
   if (!submissions) submissions = xQueueCreate(1, sizeof(SetupSubmission));
+  if (!scanEventRegistered) {
+    // Runs in the Arduino event task after the WiFi library has copied the
+    // results (WiFi.SSID(i) etc.); only flags are set here.
+    WiFi.onEvent([](arduino_event_id_t, arduino_event_info_t info) {
+      scanDoneOk = info.wifi_scan_done.status == 0;
+      scanDoneEvent = true;
+    }, ARDUINO_EVENT_WIFI_SCAN_DONE);
+    scanEventRegistered = true;
+  }
   firstRunMode = firstRun;
   haveNetwork = hasWifiNetwork();
   serverCheck = ServerCheck::NotChecked;
   restartIssued = false;
   makeApCredentials();
   setTarget("");
+  formFilled = false; // The setup task is not running yet.
   WiFi.mode(WIFI_AP_STA);
   if (!submissions || !WiFi.softAP(apSsid, apPassword)) {
     WiFi.softAPdisconnect(true);
@@ -334,7 +493,8 @@ bool startWifiSetup(bool firstRun) {
     return false;
   }
   lastActivity = lastRequestMs = millis();
-  Serial.printf("Setup hotspot started: %s\n", apSsid);
+  Serial.printf("[SETUP] Hotspot started: %s at http://%s/ (%s mode)\n", apSsid,
+                WiFi.softAPIP().toString().c_str(), firstRun ? "first-run" : "settings");
   setPhase(WifiSetupPhase::Waiting);
   return true;
 }
@@ -348,6 +508,10 @@ void stopWifiSetup() {
 void updateWifiSetup() {
   WifiSetupPhase current = phase;
   if (current == WifiSetupPhase::Off || current == WifiSetupPhase::StartFailed) return;
+  // The setup flow waits on the network switch it requested, so it drives
+  // that switch itself (WiFi.begin, join check, timeout): Setup Mode's loop
+  // does not run updateSettings(), which also calls this.
+  updateWifiSwitch();
 
   if (current == WifiSetupPhase::Stopping) {
     if (taskRunning) return;
@@ -361,6 +525,7 @@ void updateWifiSetup() {
   if (current == WifiSetupPhase::Restarting) {
     if (!restartIssued && millis() - restartAt >= RESTART_DELAY_MS) {
       restartIssued = true;
+      Serial.println("[SETUP] Restarting now");
       restartDevice();
     }
     return;
@@ -371,6 +536,11 @@ void updateWifiSetup() {
     memcpy(pendingBackend, submission.backend, sizeof(pendingBackend));
     pendingBackendChanged = strcmp(pendingBackend, backendUrl()) != 0;
     lastActivity = millis();
+    Serial.printf("[SETUP] Submission: %s; server %s; Wi-Fi mode %s, AP %s, %u client(s)\n",
+                  submission.changeWifi ? "join a new network" : "keep the current network",
+                  pendingBackendChanged ? "changed" : "unchanged",
+                  WiFi.getMode() == WIFI_MODE_APSTA ? "AP+STA" : WiFi.getMode() == WIFI_MODE_AP ? "AP" : "STA",
+                  WiFi.getMode() & WIFI_MODE_AP ? "up" : "off", unsigned(WiFi.softAPgetStationNum()));
     if (submission.changeWifi) {
       setTarget(submission.wifi.ssid);
       requestWifiSwitch(submission.wifi, WifiSource::Saved);
@@ -383,17 +553,22 @@ void updateWifiSetup() {
   }
 
   if (current == WifiSetupPhase::Connecting) {
-    WifiSwitchState state = wifiSwitchState();
-    if (state == WifiSwitchState::Connected) {
-      if (setupNeedsRestart(firstRunMode, pendingBackendChanged)) {
+    switch (setupAfterSwitch(wifiSwitchState(), firstRunMode, pendingBackendChanged)) {
+      case SetupJoinOutcome::Apply:
         applySubmission();
-      } else {
+        break;
+      case SetupJoinOutcome::ConnectedOnly:
+        Serial.println("[SETUP] Joined; server unchanged, no restart");
         connectedAt = millis();
         setPhase(WifiSetupPhase::Connected);
-      }
-    } else if (state == WifiSwitchState::Failed) {
-      lastActivity = millis();
-      setPhase(WifiSetupPhase::Failed);
+        break;
+      case SetupJoinOutcome::Failed:
+        Serial.println("[SETUP] Join failed; hotspot stays open for another try");
+        lastActivity = millis();
+        setPhase(WifiSetupPhase::Failed);
+        break;
+      case SetupJoinOutcome::Waiting:
+        break;
     }
     return;
   }

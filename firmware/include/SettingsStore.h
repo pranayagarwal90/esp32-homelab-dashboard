@@ -6,6 +6,12 @@
 // bluetoothPreferenceAtBoot() which runs inside initArduino().
 
 void loadSettings();
+
+// False only when the namespace does not exist yet (nothing saved there), so
+// read-only loads can skip it without Preferences logging "nvs_open failed:
+// NOT_FOUND". Any other NVS error returns true and is still reported by
+// Preferences::begin().
+bool nvsNamespaceExists(const char* name);
 const DeviceSettings& settings();
 // Edit through this reference, then call settingsChanged().
 DeviceSettings& editSettings();

@@ -39,11 +39,20 @@ extern "C" bool btInUse() {
 }
 #endif
 
+bool nvsNamespaceExists(const char* name) {
+  nvs_handle_t handle;
+  esp_err_t err = nvs_open(name, NVS_READONLY, &handle);
+  if (err == ESP_ERR_NVS_NOT_FOUND) return false;
+  if (err == ESP_OK) nvs_close(handle);
+  return true;
+}
+
 void loadSettings() {
   Preferences prefs;
   uint8_t blob[SETTINGS_BLOB_MAX];
   size_t length = 0;
-  if (prefs.begin(SETTINGS_NAMESPACE, true)) {
+  // Absent until a display setting is first changed: defaults, no error log.
+  if (nvsNamespaceExists(SETTINGS_NAMESPACE) && prefs.begin(SETTINGS_NAMESPACE, true)) {
     if (prefs.isKey(SETTINGS_KEY)) length = prefs.getBytes(SETTINGS_KEY, blob, sizeof(blob));
     prefs.end();
   }
@@ -95,7 +104,7 @@ void serviceSettingsStore() {
 bool loadSavedWifi(WifiCredentials& out) {
   memset(&out, 0, sizeof(out));
   Preferences prefs;
-  if (!prefs.begin(WIFI_NAMESPACE, true)) return false;
+  if (!nvsNamespaceExists(WIFI_NAMESPACE) || !prefs.begin(WIFI_NAMESPACE, true)) return false;
   bool ok = prefs.isKey("ssid") && prefs.getString("ssid", out.ssid, sizeof(out.ssid)) > 0;
   if (ok && prefs.isKey("pass")) prefs.getString("pass", out.password, sizeof(out.password));
   prefs.end();

@@ -1,6 +1,7 @@
 #pragma once
 #include <stdint.h>
 #include "SettingsLogic.h"
+#include "ProvisioningLogic.h"
 #include "SettingsStore.h"
 
 // Main task, setup only, before anything else here: loads the saved network
@@ -25,7 +26,7 @@ WifiSource activeWifiSource();
 
 // Nonblocking network switch (main task). A request waits (Pending) while the
 // status worker is mid-reconnect, then starts on a later updateWifiSwitch().
-enum class WifiSwitchState : uint8_t { Idle, Pending, Connecting, Connected, Failed };
+// WifiSwitchState and its transitions are in ProvisioningLogic.h.
 void requestWifiSwitch(const WifiCredentials& target, WifiSource targetSource);
 // Call every loop. On success a Saved target is stored in NVS (a BuiltIn
 // target forgets the saved network); on failure the previous network is

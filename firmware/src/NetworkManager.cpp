@@ -6,7 +6,6 @@
 #include "ProvisioningLogic.h"
 #include "SystemAnimation.h"
 
-static constexpr uint32_t SWITCH_TIMEOUT_MS = 20000;
 
 // Serializes WiFi.disconnect()/begin() between the status worker's reconnect
 // and the main task's network switch. The main task only ever try-takes it.
@@ -26,7 +25,31 @@ static WifiSource switchSource = WifiSource::BuiltIn;
 static WifiCredentials switchPrevious;
 static WifiSource switchPreviousSource = WifiSource::BuiltIn;
 static unsigned long switchStarted = 0;
+static int switchLoggedStatus = -1; // Last WiFi.status() logged during a switch.
+static bool switchWaitLogged = false;
 static volatile bool gotIp = false;
+
+static const char* stationStatusName(int status) {
+  switch (status) {
+    case WL_IDLE_STATUS: return "IDLE";
+    case WL_NO_SSID_AVAIL: return "NO_SSID_AVAIL";
+    case WL_SCAN_COMPLETED: return "SCAN_COMPLETED";
+    case WL_CONNECTED: return "CONNECTED";
+    case WL_CONNECT_FAILED: return "CONNECT_FAILED";
+    case WL_CONNECTION_LOST: return "CONNECTION_LOST";
+    case WL_DISCONNECTED: return "DISCONNECTED";
+    default: return "NO_SHIELD";
+  }
+}
+
+static const char* wifiModeName(wifi_mode_t mode) {
+  switch (mode) {
+    case WIFI_MODE_STA: return "STA";
+    case WIFI_MODE_AP: return "AP";
+    case WIFI_MODE_APSTA: return "AP+STA";
+    default: return "OFF";
+  }
+}
 
 bool builtInWifiCredentials(WifiCredentials& out) {
   memset(&out, 0, sizeof(out));
@@ -155,10 +178,15 @@ void requestWifiSwitch(const WifiCredentials& target, WifiSource targetSource) {
   switchTarget = target;
   switchSource = targetSource;
   switchState = WifiSwitchState::Pending;
+  switchWaitLogged = false;
 }
 
 static bool beginWifiSwitch() {
-  if (!wifiControl || xSemaphoreTake(wifiControl, 0) != pdTRUE) return false;
+  if (!wifiControl || xSemaphoreTake(wifiControl, 0) != pdTRUE) {
+    if (!switchWaitLogged) Serial.println("[WIFI] Switch pending: the status worker is reconnecting");
+    switchWaitLogged = true;
+    return false;
+  }
   portENTER_CRITICAL(&credentialsLock);
   switchPrevious = activeCredentials;
   switchPreviousSource = activeSource;
@@ -166,8 +194,12 @@ static bool beginWifiSwitch() {
   // STA only: a running setup hotspot (AP) stays up.
   WiFi.disconnect(false, false);
   gotIp = false;
+  Serial.printf("[WIFI] WiFi.begin(\"%s\"), mode %s, AP %s (%u client(s))\n", switchTarget.ssid,
+                wifiModeName(WiFi.getMode()), WiFi.getMode() & WIFI_MODE_AP ? "up" : "off",
+                unsigned(WiFi.softAPgetStationNum()));
   WiFi.begin(switchTarget.ssid, switchTarget.password);
   switchStarted = millis();
+  switchLoggedStatus = -1;
   switchState = WifiSwitchState::Connecting;
   return true;
 }
@@ -175,10 +207,19 @@ static bool beginWifiSwitch() {
 WifiSwitchState updateWifiSwitch() {
   if (switchState == WifiSwitchState::Pending) beginWifiSwitch();
   if (switchState != WifiSwitchState::Connecting) return switchState;
-  bool joined = gotIp && WiFi.status() == WL_CONNECTED && WiFi.SSID() == switchTarget.ssid;
-  if (joined) {
-    if (switchSource == WifiSource::Saved) {
-      if (!saveWifi(switchTarget)) Serial.println("Could not store Wi-Fi network");
+  int status = WiFi.status();
+  uint32_t elapsed = millis() - switchStarted;
+  if (status != switchLoggedStatus) {
+    Serial.printf("[WIFI] Station status %s after %lu ms\n", stationStatusName(status), (unsigned long)elapsed);
+    switchLoggedStatus = status;
+  }
+  bool joined = wifiSwitchJoined(gotIp, status == WL_CONNECTED, WiFi.SSID() == switchTarget.ssid);
+  WifiSwitchStep step = wifiSwitchStep(switchState, joined, elapsed, switchSource == WifiSource::Saved);
+  if (step.next == WifiSwitchState::Connected) {
+    Serial.printf("[WIFI] Joined \"%s\", IP %s\n", switchTarget.ssid, WiFi.localIP().toString().c_str());
+    if (step.saveCredentials) {
+      bool saved = saveWifi(switchTarget);
+      Serial.printf("[WIFI] Credentials %s\n", saved ? "saved to NVS" : "NOT saved (NVS write failed)");
       portENTER_CRITICAL(&credentialsLock);
       savedCredentials = switchTarget;
       savedAvailable = true;
@@ -195,10 +236,12 @@ WifiSwitchState updateWifiSwitch() {
     xSemaphoreGive(wifiControl);
     return switchState;
   }
-  if (millis() - switchStarted < SWITCH_TIMEOUT_MS) return switchState;
+  if (step.next == WifiSwitchState::Connecting) return switchState;
 
-  // Failed: restore the previous network (if any, e.g. not on first run);
-  // the status worker keeps retrying it.
+  // Timed out: nothing saved; restore the previous network (if any, e.g. not
+  // on first run); the status worker keeps retrying it.
+  Serial.printf("[WIFI] Could not join \"%s\" within %lu ms (last status %s); nothing saved\n",
+                switchTarget.ssid, (unsigned long)elapsed, stationStatusName(status));
   WiFi.disconnect(false, false);
   if (switchPrevious.ssid[0]) WiFi.begin(switchPrevious.ssid, switchPrevious.password);
   setActive(switchPrevious, switchPreviousSource);
