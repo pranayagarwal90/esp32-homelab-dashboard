@@ -245,6 +245,8 @@ g++ -std=c++11 -Wall -Wextra -Werror -Ifirmware/include firmware/test/test_syste
 g++ -std=c++11 -Wall -Wextra -Werror -Ifirmware/include firmware/test/test_weather_logic.cpp -o /tmp/test-weather
 /tmp/test-navigation
 g++ -std=c++11 -Wall -Wextra -Werror -Ifirmware/include firmware/test/test_navigation.cpp -o /tmp/test-navigation
+g++ -std=c++11 -Wall -Wextra -Werror -Ifirmware/include firmware/test/test_backend_url.cpp -o /tmp/test-backend-url && /tmp/test-backend-url
+g++ -std=c++11 -Wall -Wextra -Werror -Ifirmware/include firmware/test/test_provisioning.cpp -o /tmp/test-provisioning && /tmp/test-provisioning
 # Needs ArduinoJson from a previous `pio run` (header-only):
 g++ -std=c++11 -Wall -Wextra -Werror -Ifirmware/include -Ifirmware/.pio/libdeps/esp32dev/ArduinoJson/src firmware/test/test_ai_logic.cpp -o /tmp/test-ai && /tmp/test-ai
 g++ -std=c++11 -Wall -Wextra -Werror -Ifirmware/include -Ifirmware/.pio/libdeps/esp32dev/ArduinoJson/src firmware/test/test_service_status.cpp -o /tmp/test-service-status && /tmp/test-service-status
@@ -298,8 +300,9 @@ subsystem has a header in `firmware/include/` and a source in `firmware/src/`:
 
 TFT drawing and JPEG decoding happen only on the Arduino loop task; the
 status, photo and AI workers only do network I/O and never draw.
-`deploy-esp32.sh` mirrors all of `firmware/src/` (deleting stale files) and
-copies `firmware/include/` to the Windows project, never copying or deleting
+`deploy-esp32.sh` mirrors all of `firmware/src/` (deleting stale files),
+copies `firmware/include/` and `firmware/platformio_override.ini` (required:
+it holds the OTA address) to the Windows project, never copying or deleting
 `secrets.h`.
 
 ## Alerts
@@ -537,13 +540,54 @@ sleep own the display through `updatePower()`, which makes `loop()` skip
 touch, status redraws and the screensaver until the device reboots or
 sleeps. Runtime reconnects still show OFFLINE in the header.
 
+## First-run setup and the dashboard server
+
+The firmware contains no Wi-Fi credentials and no backend address: the same
+binary works on any network. Configuration lives in NVS:
+
+| NVS | Contents |
+| --- | --- |
+| `wifi/ssid`, `wifi/pass` | The Wi-Fi network (unchanged from earlier firmware) |
+| `device/backend` | Dashboard backend base URL, e.g. `http://192.168.1.50:8090` |
+| `settings/device` | Display settings blob (unchanged) |
+
+At boot the display starts **Setup Mode** instead of the dashboard when it
+has no Wi-Fi network, no valid dashboard server, or cannot join its network
+within about a minute (4 attempts of 15 s). Setup Mode shows `SETUP
+REQUIRED`, the reason, and a hotspot `Homelab-Setup-XXXX` with a random
+password shown only on the display. Join it, open `http://192.168.4.1` and
+enter the Wi-Fi network and the **Dashboard Server** (`http://host:port`
+only; `https://`, paths such as `/api/status`, credentials and IPv6 are
+rejected, and a missing `http://` is not guessed). Everything is validated
+before anything is saved. The Wi-Fi network is saved only once the display
+has joined it; then the server URL is saved, checked once with
+`GET /api/status` (informational: it is saved even if the server is down) and
+the display restarts. **RESTART** on the screen retries. After a failed
+connect, an unused hotspot also restarts by itself after 5 minutes (e.g. the
+router was still booting after a power cut). Saved credentials are never
+erased automatically.
+
+An unreachable backend never triggers setup: the dashboard runs with NO DATA /
+OFFLINE and **Settings > Connectivity > Dashboard Server** shows the address
+and whether it responds. The backend URL is read once at boot (immutable while
+running, so the status, photo and AI tasks share it without locks); changing
+it restarts the display.
+
+**Developer builds.** `firmware/include/secrets.h` is optional and used only
+with `-D DASHBOARD_DEV_DEFAULTS` (set in the git-ignored
+`firmware/platformio_override.ini`; see `platformio_override.ini.example`).
+It then adds a built-in Wi-Fi network tried alongside the saved one, and
+`DASHBOARD_DEV_BACKEND_URL` is written to `device/backend` once if the device
+has none, so a device running older firmware upgrades without setup. Public
+builds contain none of this.
+
 ## Settings
 
 The SETTINGS tab is a three-level list with an icon per row (BACK goes one
 level up; the root's bottom bar is the navigation):
 
 - **SYSTEM**: Device Info, Firmware / Build, Restart, Sleep
-- **CONNECTIVITY**: Wi-Fi, Bluetooth
+- **CONNECTIVITY**: Wi-Fi, Dashboard Server, Bluetooth
 - **DISPLAY**: Brightness, Screensaver, Photos & Wallpaper
 - **UTILITIES**: Stopwatch
 
@@ -551,12 +595,13 @@ Settings Settings are stored in NVS (namespace `settings`) and
 defaults reproduce the previous fixed behaviour (auto brightness 100/15/60%,
 3 min screensaver, 30 s photo/clock rotation, Bluetooth off).
 
-- **Wi-Fi > Change Wi-Fi** opens a hotspot `Homelab-Setup-XXXX` whose random
-  password is shown only on the display. Join it, open `http://192.168.4.1`
-  and submit the network. The dashboard stays online meanwhile; if the new
-  network fails within 20 s the previous one is restored. The saved network
-  is stored in NVS (namespace `wifi`, not encrypted) and `secrets.h` remains
-  the fallback. **Use built-in** forgets the saved network.
+- **Wi-Fi > Change Wi-Fi** and **Dashboard Server > Change** open the same
+  setup hotspot (see First-run setup). The dashboard stays online meanwhile;
+  if a new network fails within 20 s the previous one is restored. Leave the
+  Wi-Fi fields blank to change only the server. A Wi-Fi-only change applies
+  without a restart; a server change restarts the display. The saved network
+  is stored in NVS (namespace `wifi`, not encrypted). **Use built-in**
+  (developer builds with `secrets.h` only) forgets the saved network.
 - **Bluetooth** is not compiled in by default (the controller library costs
   ~149 KB flash and ~5 KB RAM even when off); the page then says so. To
   enable it, add `-D DASHBOARD_BLUETOOTH=1` to `build_flags` in

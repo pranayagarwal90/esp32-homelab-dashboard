@@ -9,6 +9,7 @@
 #include "Screensaver.h"
 #include "ServicesScreen.h"
 #include "SettingsScreen.h"
+#include "SetupScreen.h"
 #include "StopwatchScreen.h"
 #include "TimeWeatherScreen.h"
 #include "WeatherScreen.h"
@@ -41,6 +42,7 @@ void drawCurrentPage() {
     case PAGE_HOMESERVER: drawHomeServerPage(); break;
     case PAGE_AI: drawAiMenuPage(); break;
     case PAGE_AI_RESULT: drawAiResultPage(); break;
+    case PAGE_SETUP: drawSetupPage(); break;
   }
 }
 

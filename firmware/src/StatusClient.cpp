@@ -9,7 +9,7 @@
 #include "AlertLogic.h"
 #include "AlertManager.h"
 #include "ServicesLogic.h"
-#include "ApiConfig.h"
+#include "DeviceConfig.h"
 #include "AppState.h"
 #include "BacklightPwm.h"
 #include "CalendarScreen.h"
@@ -95,6 +95,8 @@ static void parseRichWeather(JsonVariantConst w, WeatherData& weather) {
 // Runs on the status worker task. Must not touch AppState or the TFT.
 static StatusOutcome readStatus(const StatusRequest& request, StatusSnapshot& snapshot) {
   if (!ensureWiFiConnected(STATUS_TIMEOUT_MS)) return StatusOutcome::ReconnectFailed;
+  char url[API_URL_MAX];
+  if (!statusUrl(url, sizeof(url))) return StatusOutcome::HttpFailed;
 
   StatusClient client;
   HTTPClient http;
@@ -103,7 +105,7 @@ static StatusOutcome readStatus(const StatusRequest& request, StatusSnapshot& sn
   http.setReuse(false);
   // HTTP/1.0 requests an identity body, avoiding raw chunk framing.
   http.useHTTP10(true);
-  if (!http.begin(client, API_STATUS)) return StatusOutcome::HttpFailed;
+  if (!http.begin(client, url)) return StatusOutcome::HttpFailed;
   int code = http.GET();
   if (code != HTTP_CODE_OK) {
     Serial.printf("HTTP error: %d\n", code);

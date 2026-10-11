@@ -169,10 +169,13 @@ static void testHierarchy() {
   assert(tapRow(SettingsView::System, 2).confirm == ConfirmAction::Restart);
   assert(tapRow(SettingsView::System, 3).confirm == ConfirmAction::Sleep);
 
-  // CONNECTIVITY: Wi-Fi, Bluetooth.
-  assert(settingsMenuFor(SettingsView::Connectivity, menu) && menu.count == 2);
+  // CONNECTIVITY: Wi-Fi, Dashboard Server, Bluetooth.
+  assert(settingsMenuFor(SettingsView::Connectivity, menu) && menu.count == 3);
   assert(tapRow(SettingsView::Connectivity, 0).target == SettingsView::Wifi);
-  assert(tapRow(SettingsView::Connectivity, 1).target == SettingsView::Bluetooth);
+  assert(tapRow(SettingsView::Connectivity, 1).target == SettingsView::Server);
+  assert(strcmp(tapRow(SettingsView::Connectivity, 1).label, "DASHBOARD SERVER") == 0);
+  assert(tapRow(SettingsView::Connectivity, 1).confirm == ConfirmAction::None);
+  assert(tapRow(SettingsView::Connectivity, 2).target == SettingsView::Bluetooth);
 
   // DISPLAY: Brightness, Screensaver, Photos & Wallpaper.
   assert(settingsMenuFor(SettingsView::DisplayMenu, menu) && menu.count == 3);
@@ -183,6 +186,7 @@ static void testHierarchy() {
 
   // Feature pages are not list menus.
   assert(!settingsMenuFor(SettingsView::Wifi, menu));
+  assert(!settingsMenuFor(SettingsView::Server, menu));
   assert(!settingsMenuFor(SettingsView::Build, menu));
 
   // BACK: feature -> category -> root; the root has no BACK (SETTINGS is a
@@ -191,6 +195,7 @@ static void testHierarchy() {
   assert(settingsParent(SettingsView::Build) == SettingsView::System);
   assert(settingsParent(SettingsView::Wifi) == SettingsView::Connectivity);
   assert(settingsParent(SettingsView::WifiSetup) == SettingsView::Connectivity);
+  assert(settingsParent(SettingsView::Server) == SettingsView::Connectivity);
   assert(settingsParent(SettingsView::Bluetooth) == SettingsView::Connectivity);
   assert(settingsParent(SettingsView::Brightness) == SettingsView::DisplayMenu);
   assert(settingsParent(SettingsView::Screensaver) == SettingsView::DisplayMenu);
@@ -203,7 +208,7 @@ static void testHierarchy() {
   assert(settingsBottomIsNav(SettingsView::Root));
   const SettingsView others[] = {SettingsView::System, SettingsView::Connectivity, SettingsView::DisplayMenu,
                                  SettingsView::Utilities, SettingsView::Brightness, SettingsView::Build,
-                                 SettingsView::Wifi, SettingsView::Info};
+                                 SettingsView::Wifi, SettingsView::Server, SettingsView::Info};
   for (SettingsView v : others) assert(!settingsBottomIsNav(v));
   SettingsView view = SettingsView::Wallpaper;
   int levels = 0;
@@ -234,7 +239,8 @@ static void testHierarchy() {
   assert(tapRow(SettingsView::System, 2).icon == UiIcon::Restart);
   assert(tapRow(SettingsView::System, 3).icon == UiIcon::Sleep);
   assert(tapRow(SettingsView::Connectivity, 0).icon == UiIcon::Wifi);
-  assert(tapRow(SettingsView::Connectivity, 1).icon == UiIcon::Bluetooth);
+  assert(tapRow(SettingsView::Connectivity, 1).icon == UiIcon::HomeServer);
+  assert(tapRow(SettingsView::Connectivity, 2).icon == UiIcon::Bluetooth);
   assert(tapRow(SettingsView::DisplayMenu, 0).icon == UiIcon::Brightness);
   assert(tapRow(SettingsView::DisplayMenu, 1).icon == UiIcon::Screensaver);
   assert(tapRow(SettingsView::DisplayMenu, 2).icon == UiIcon::Photos);
@@ -301,16 +307,25 @@ static void testFormatting() {
 
 static void testWifiSelection() {
   uint8_t failures = 0;
-  // No saved network: always the built-in one (original behaviour).
+  // Developer build, no saved network: always the built-in one.
   failures = 9;
-  assert(reconnectSource(WifiSource::BuiltIn, false, failures) == WifiSource::BuiltIn && failures == 0);
-  // Saved network: stay on the active one until two consecutive failures.
+  assert(reconnectSource(WifiSource::BuiltIn, false, true, failures) == WifiSource::BuiltIn && failures == 0);
+  // Saved and built-in: stay on the active one until two consecutive failures.
   failures = 1;
-  assert(reconnectSource(WifiSource::Saved, true, failures) == WifiSource::Saved && failures == 1);
+  assert(reconnectSource(WifiSource::Saved, true, true, failures) == WifiSource::Saved && failures == 1);
   failures = 2;
-  assert(reconnectSource(WifiSource::Saved, true, failures) == WifiSource::BuiltIn && failures == 0);
+  assert(reconnectSource(WifiSource::Saved, true, true, failures) == WifiSource::BuiltIn && failures == 0);
   failures = 2;
-  assert(reconnectSource(WifiSource::BuiltIn, true, failures) == WifiSource::Saved && failures == 0);
+  assert(reconnectSource(WifiSource::BuiltIn, true, true, failures) == WifiSource::Saved && failures == 0);
+  // Public build (no built-in network): always the saved one, never switches.
+  for (uint8_t f = 0; f < 5; f++) {
+    failures = f;
+    assert(reconnectSource(WifiSource::Saved, true, false, failures) == WifiSource::Saved && failures == 0);
+  }
+
+  // Confirmation for the setup hotspot names both things it can change.
+  assert(strcmp(confirmText(ConfirmAction::StartWifiSetup).title, "START SETUP?") == 0);
+  assert(strstr(confirmText(ConfirmAction::StartWifiSetup).line2, "dashboard server") != nullptr);
 
   assert(validWifiInput("Home", 4, 0));     // Open network.
   assert(validWifiInput("Home", 4, 8));

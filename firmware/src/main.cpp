@@ -5,6 +5,7 @@
 #include "BacklightPwm.h"
 #include "BluetoothControl.h"
 #include "CalendarScreen.h"
+#include "DeviceConfig.h"
 #include "Display.h"
 #include "NetworkManager.h"
 #include "OtaManager.h"
@@ -14,6 +15,7 @@
 #include "Screensaver.h"
 #include "SettingsScreen.h"
 #include "SettingsStore.h"
+#include "SetupScreen.h"
 #include "StatusClient.h"
 #include "StopwatchScreen.h"
 #include "TouchHandler.h"
@@ -40,7 +42,18 @@ void setup() {
   setupTouch();
   setupPhotoDecoder();
 
-  connectWiFi();
+  // Boot decision: configuration first (NVS), then the network. Missing or
+  // invalid configuration, or a network that cannot be joined, starts Setup
+  // Mode instead of the dashboard; an unreachable backend never does.
+  loadDeviceConfig();
+  initNetwork();
+  SetupReason setupReason = bootSetupReason(hasWifiNetwork(), backendUrlStored(), hasBackendUrl());
+  if (setupReason == SetupReason::None && !connectWiFi()) setupReason = SetupReason::WifiFailed;
+  if (setupReason != SetupReason::None) {
+    enterSetupMode(setupReason);
+    return;
+  }
+
   setupOTA();
   randomSeed(micros());
 
@@ -55,6 +68,12 @@ void setup() {
 }
 
 void loop() {
+  if (setupModeActive()) {
+    if (updatePower()) return; // Restart after saving, or RESTART.
+    handleTouch();
+    updateSetupMode();
+    return;
+  }
   if (handleOTA()) return;
   if (updatePower()) return;
   handleTouch();

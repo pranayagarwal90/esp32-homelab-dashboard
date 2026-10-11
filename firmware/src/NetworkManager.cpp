@@ -2,10 +2,10 @@
 #include <WiFi.h>
 #include <freertos/semphr.h>
 #include "NetworkManager.h"
+#include "DevDefaults.h"
+#include "ProvisioningLogic.h"
 #include "SystemAnimation.h"
-#include "secrets.h"
 
-static constexpr uint32_t BOOT_ATTEMPT_MS = 15000;
 static constexpr uint32_t SWITCH_TIMEOUT_MS = 20000;
 
 // Serializes WiFi.disconnect()/begin() between the status worker's reconnect
@@ -28,10 +28,20 @@ static WifiSource switchPreviousSource = WifiSource::BuiltIn;
 static unsigned long switchStarted = 0;
 static volatile bool gotIp = false;
 
-void builtInWifiCredentials(WifiCredentials& out) {
+bool builtInWifiCredentials(WifiCredentials& out) {
   memset(&out, 0, sizeof(out));
-  strncpy(out.ssid, WIFI_SSID, sizeof(out.ssid) - 1);
-  strncpy(out.password, WIFI_PASSWORD, sizeof(out.password) - 1);
+  if (!DEV_BUILTIN_WIFI) return false;
+  strncpy(out.ssid, DEV_WIFI_SSID, sizeof(out.ssid) - 1);
+  strncpy(out.password, DEV_WIFI_PASSWORD, sizeof(out.password) - 1);
+  return out.ssid[0] != '\0';
+}
+
+bool hasBuiltInWifi() {
+  return DEV_BUILTIN_WIFI && DEV_WIFI_SSID[0] != '\0';
+}
+
+bool hasWifiNetwork() {
+  return savedAvailable || hasBuiltInWifi();
 }
 
 static void credentialsFor(WifiSource source, WifiCredentials& out) {
@@ -56,26 +66,29 @@ WifiSource activeWifiSource() {
   return source;
 }
 
-void connectWiFi() {
-  // Boot (or wake) animation, then Wi-Fi arcs; drawn while connecting.
-  startupAnimationBegin();
-
-  wifiControl = xSemaphoreCreateMutex();
+void initNetwork() {
+  if (!wifiControl) wifiControl = xSemaphoreCreateMutex();
   savedAvailable = loadSavedWifi(savedCredentials);
   WiFi.onEvent([](arduino_event_id_t, arduino_event_info_t) { gotIp = true; },
                ARDUINO_EVENT_WIFI_STA_GOT_IP);
-
   WiFi.mode(WIFI_STA);
+}
+
+bool connectWiFi() {
+  if (!hasWifiNetwork()) return false;
+  // Boot (or wake) animation, then Wi-Fi arcs; drawn while connecting.
+  startupAnimationBegin();
+
   WifiSource source = savedAvailable ? WifiSource::Saved : WifiSource::BuiltIn;
   WifiCredentials credentials;
-  for (;;) {
+  bool connected = false;
+  for (uint8_t attempt = 0; attempt < BOOT_CONNECT_ATTEMPTS && !connected; attempt++) {
     credentialsFor(source, credentials);
     startupAnimationSetNetwork(credentials.ssid);
     WiFi.begin(credentials.ssid, credentials.password);
     unsigned long start = millis(), lastDot = start;
-    // Same attempt timing as before; polled every 20 ms (yielding) instead of
-    // 500 ms so the animation can run.
-    while (WiFi.status() != WL_CONNECTED && (!savedAvailable || millis() - start < BOOT_ATTEMPT_MS)) {
+    // Polled every 20 ms (yielding) so the animation can run.
+    while (WiFi.status() != WL_CONNECTED && millis() - start < BOOT_ATTEMPT_MS) {
       startupAnimationService();
       vTaskDelay(pdMS_TO_TICKS(20));
       if (millis() - lastDot >= 500) {
@@ -83,18 +96,31 @@ void connectWiFi() {
         Serial.print(".");
       }
     }
-    if (WiFi.status() == WL_CONNECTED) break;
+    connected = WiFi.status() == WL_CONNECTED;
+    if (connected) break;
     startupAnimationAttemptFailed();
-    // Only reached with a saved network: alternate with the built-in one.
     WiFi.disconnect();
-    source = source == WifiSource::Saved ? WifiSource::BuiltIn : WifiSource::Saved;
+    // Alternate when both a saved and a built-in network exist.
+    if (savedAvailable && hasBuiltInWifi()) {
+      source = source == WifiSource::Saved ? WifiSource::BuiltIn : WifiSource::Saved;
+    }
+  }
+  Serial.println();
+  if (!connected) {
+    // Stop the station so the setup hotspot keeps a stable channel.
+    memset(&credentials, 0, sizeof(credentials));
+    WiFi.disconnect();
+    systemAnimationCancel();
+    Serial.println("Wi-Fi: no network joined; starting setup");
+    return false;
   }
   setActive(credentials, source);
+  memset(&credentials, 0, sizeof(credentials));
   WiFi.setSleep(false);
-  Serial.println();
   Serial.print("ESP32 IP: ");
   Serial.println(WiFi.localIP());
   startupAnimationFinish();
+  return true;
 }
 
 bool ensureWiFiConnected(uint32_t timeoutMs) {
@@ -104,7 +130,7 @@ bool ensureWiFiConnected(uint32_t timeoutMs) {
   }
   if (wifiControl && xSemaphoreTake(wifiControl, 0) != pdTRUE) return false;
 
-  WifiSource source = reconnectSource(activeWifiSource(), savedAvailable, reconnectFailures);
+  WifiSource source = reconnectSource(activeWifiSource(), savedAvailable, hasBuiltInWifi(), reconnectFailures);
   WifiCredentials credentials;
   credentialsFor(source, credentials);
   WiFi.disconnect();
@@ -171,9 +197,10 @@ WifiSwitchState updateWifiSwitch() {
   }
   if (millis() - switchStarted < SWITCH_TIMEOUT_MS) return switchState;
 
-  // Failed: restore the previous network; the status worker keeps retrying it.
+  // Failed: restore the previous network (if any, e.g. not on first run);
+  // the status worker keeps retrying it.
   WiFi.disconnect(false, false);
-  WiFi.begin(switchPrevious.ssid, switchPrevious.password);
+  if (switchPrevious.ssid[0]) WiFi.begin(switchPrevious.ssid, switchPrevious.password);
   setActive(switchPrevious, switchPreviousSource);
   switchState = WifiSwitchState::Failed;
   xSemaphoreGive(wifiControl);

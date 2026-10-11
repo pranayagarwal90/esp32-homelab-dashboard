@@ -287,8 +287,7 @@ static void runConfirmed(ConfirmAction action) {
       break;
     case ConfirmAction::ForgetWifi: {
       WifiCredentials builtIn;
-      builtInWifiCredentials(builtIn);
-      requestWifiSwitch(builtIn, WifiSource::BuiltIn);
+      if (builtInWifiCredentials(builtIn)) requestWifiSwitch(builtIn, WifiSource::BuiltIn);
       memset(&builtIn, 0, sizeof(builtIn));
       showSettingsView(SettingsView::Wifi);
       break;
@@ -339,6 +338,7 @@ void drawSettingsPage() {
     case SettingsView::Screensaver: drawScreensaverSettings(); break;
     case SettingsView::Info: drawDeviceInfo(); break;
     case SettingsView::Wifi: drawWifiSettings(); break;
+    case SettingsView::Server: drawServerSettings(); break;
     case SettingsView::Bluetooth: drawBluetoothSettings(); break;
     case SettingsView::Sleeping: drawSleeping(); break;
     case SettingsView::Wallpaper: drawWallpaperSettings(); break;
@@ -384,6 +384,7 @@ void handleSettingsTouch(int x, int y) {
     case SettingsView::Brightness: handleDisplaySettingsTouch(x, y); break;
     case SettingsView::Screensaver: handleScreensaverSettingsTouch(x, y); break;
     case SettingsView::Wifi: handleWifiSettingsTouch(x, y); break;
+    case SettingsView::Server: handleServerSettingsTouch(x, y); break;
     case SettingsView::Bluetooth: handleBluetoothTouch(x, y); break;
     default: {
       SettingsMenu menu;
@@ -400,6 +401,7 @@ void updateSettings() {
   if (app.currentPage != PAGE_SETTINGS) return;
   if (view == SettingsView::Info && millis() - infoLastRefresh >= INFO_REFRESH_MS) drawInfoValues();
   if (view == SettingsView::Wifi) updateWifiSettings();
+  if (view == SettingsView::Server) updateServerSettings();
   if (view == SettingsView::WifiSetup) updateWifiSetupView();
   if (view == SettingsView::Wallpaper) updateWallpaperSettings();
 }

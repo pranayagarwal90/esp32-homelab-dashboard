@@ -6,7 +6,7 @@
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
 #include "PhotoClient.h"
-#include "ApiConfig.h"
+#include "DeviceConfig.h"
 
 static constexpr uint32_t PHOTO_LIST_TIMEOUT_MS = 6000;    // Inactivity, as before.
 static constexpr uint32_t PHOTO_LIST_DEADLINE_MS = 10000;  // Whole request.
@@ -45,6 +45,8 @@ public:
 
 static bool readList() {
   if (WiFi.status() != WL_CONNECTED) return false;
+  char url[API_URL_MAX];
+  if (!photosUrl(url, sizeof(url))) return false;
 
   DeadlineClient client(PHOTO_LIST_DEADLINE_MS);
   HTTPClient http;
@@ -53,7 +55,7 @@ static bool readList() {
   http.setReuse(false);
   // HTTP/1.0 requests an identity body, avoiding raw chunk framing.
   http.useHTTP10(true);
-  if (!http.begin(client, API_PHOTOS)) return false;
+  if (!http.begin(client, url)) return false;
   int code = http.GET();
   if (code != HTTP_CODE_OK) {
     Serial.printf("Photo list HTTP error: %d\n", code);
@@ -107,7 +109,8 @@ static bool readList() {
 static bool readImage(const char* name, uint8_t** out, size_t* outLength) {
   if (WiFi.status() != WL_CONNECTED) return false;
 
-  String url = String(API_BASE) + "/photos/" + name;
+  char url[PHOTO_URL_MAX];
+  if (!photoUrl(url, sizeof(url), name)) return false;
   DeadlineClient client(PHOTO_IMAGE_DEADLINE_MS);
   HTTPClient http;
   http.setConnectTimeout(PHOTO_CONNECT_TIMEOUT_MS);

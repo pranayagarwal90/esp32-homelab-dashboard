@@ -3,11 +3,19 @@
 #include "SettingsLogic.h"
 #include "SettingsStore.h"
 
-// Initial blocking connect; shows the boot (or wake) and Wi-Fi animations
+// Main task, setup only, before anything else here: loads the saved network
+// (NVS wifi/ssid, wifi/pass) and prepares the station.
+void initNetwork();
+// True if there is a network to join: the saved one, or the built-in one of a
+// developer build (DevDefaults.h). Public builds have only the saved one.
+bool hasWifiNetwork();
+bool hasBuiltInWifi();
+// Blocking boot connect; shows the boot (or wake) and Wi-Fi animations
 // meanwhile (SystemAnimation). Main task, setup only. Tries the saved network
-// (if any) and the built-in secrets.h network alternately until one connects;
-// without a saved network this is the original built-in-only loop.
-void connectWiFi();
+// and the built-in one (if both exist) alternately, BOOT_CONNECT_ATTEMPTS
+// times; false if none connected (the caller starts Setup Mode). Never erases
+// credentials.
+bool connectWiFi();
 // Reconnects if needed, waiting up to timeoutMs with vTaskDelay. Never draws;
 // called from the status worker task. Returns false immediately while the
 // main task is switching networks.
@@ -24,4 +32,5 @@ void requestWifiSwitch(const WifiCredentials& target, WifiSource targetSource);
 // restored. Returns the current state.
 WifiSwitchState updateWifiSwitch();
 WifiSwitchState wifiSwitchState();
-void builtInWifiCredentials(WifiCredentials& out);
+// The developer build's built-in network; false (out zeroed) in public builds.
+bool builtInWifiCredentials(WifiCredentials& out);

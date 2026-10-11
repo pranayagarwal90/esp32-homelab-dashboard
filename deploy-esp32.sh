@@ -41,6 +41,13 @@ if [ ! -f "$FIRMWARE_DIR/platformio.ini" ]; then
     exit 1
 fi
 
+# The OTA address and developer defaults live in the git-ignored override
+# (see firmware/platformio_override.ini.example); the OTA upload needs it.
+if [ ! -f "$FIRMWARE_DIR/platformio_override.ini" ]; then
+    echo "ERROR: firmware/platformio_override.ini not found (OTA upload_port)."
+    exit 1
+fi
+
 if [ ! -d "$FIRMWARE_DIR/include" ]; then
     echo "ERROR: Firmware include directory not found:"
     echo "  $FIRMWARE_DIR/include"
@@ -85,6 +92,8 @@ mkdir -p "$WINDOWS_INCLUDE"
 
 cp "$FIRMWARE_DIR/platformio.ini" "$WINDOWS_PLATFORMIO"
 echo "  Copied: platformio.ini"
+cp "$FIRMWARE_DIR/platformio_override.ini" "$WINDOWS_PROJECT/platformio_override.ini"
+echo "  Copied: platformio_override.ini"
 
 # src/ is an exact mirror (including subdirectories such as src/games/), so a
 # file removed or renamed here cannot linger and be compiled twice on Windows.

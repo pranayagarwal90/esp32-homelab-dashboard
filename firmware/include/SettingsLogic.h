@@ -15,6 +15,7 @@ enum class SettingsView : uint8_t {
   DisplayMenu,
   Wifi,
   WifiSetup,
+  Server,     // Dashboard server (backend URL).
   Brightness,
   Screensaver,
   Bluetooth,
@@ -72,6 +73,7 @@ inline bool settingsMenuFor(SettingsView view, SettingsMenu& out) {
   };
   static const SettingsMenuEntry connectivity[] = {
     {"WI-FI", SettingsView::Wifi, A::None, UiIcon::Wifi, UiColor::Blue},
+    {"DASHBOARD SERVER", SettingsView::Server, A::None, UiIcon::HomeServer, UiColor::Green},
     {"BLUETOOTH", SettingsView::Bluetooth, A::None, UiIcon::Bluetooth, UiColor::Blue},
   };
   static const SettingsMenuEntry display[] = {
@@ -85,7 +87,7 @@ inline bool settingsMenuFor(SettingsView view, SettingsMenu& out) {
   switch (view) {
     case SettingsView::Root: out = {"SETTINGS", root, 4}; return true;
     case SettingsView::System: out = {"SYSTEM", system, 4}; return true;
-    case SettingsView::Connectivity: out = {"CONNECTIVITY", connectivity, 2}; return true;
+    case SettingsView::Connectivity: out = {"CONNECTIVITY", connectivity, 3}; return true;
     case SettingsView::DisplayMenu: out = {"DISPLAY", display, 3}; return true;
     case SettingsView::Utilities: out = {"UTILITIES", utilities, 1}; return true;
     default: return false;
@@ -110,6 +112,7 @@ inline SettingsView settingsParent(SettingsView view) {
       return SettingsView::System;
     case SettingsView::Wifi:
     case SettingsView::WifiSetup:
+    case SettingsView::Server:
     case SettingsView::Bluetooth:
       return SettingsView::Connectivity;
     case SettingsView::Brightness:
@@ -167,7 +170,7 @@ inline ConfirmText confirmText(ConfirmAction action) {
     case ConfirmAction::Sleep:
       return {"SLEEP DEVICE?", "Screen and Wi-Fi turn off.", "Wake: tap screen if supported, or press RST.", "SLEEP"};
     case ConfirmAction::StartWifiSetup:
-      return {"START WI-FI SETUP?", "Opens a setup hotspot.", "Dashboard stays connected.", "START"};
+      return {"START SETUP?", "Opens a setup hotspot to change", "Wi-Fi or the dashboard server.", "START"};
     case ConfirmAction::ForgetWifi:
       return {"USE BUILT-IN WI-FI?", "Forgets the saved network", "and reconnects (brief outage).", "SWITCH"};
     case ConfirmAction::ApplyBluetooth:
@@ -215,17 +218,19 @@ inline void formatKilobytes(char* out, size_t size, uint32_t bytes) {
 
 // --- Wi-Fi network selection -----------------------------------------------------------
 
+// BuiltIn exists only in developer builds (DASHBOARD_DEV_DEFAULTS + secrets.h);
+// public builds have only the network saved by the setup page.
 enum class WifiSource : uint8_t { BuiltIn, Saved };
 
 // Reconnect policy: stay on the active network; after RECONNECT_SWITCH_AFTER
-// consecutive failures switch to the other one (if a saved network exists) and
-// start counting again. Returns the source to try next.
+// consecutive failures switch to the other one (if both exist) and start
+// counting again. Returns the source to try next.
 constexpr uint8_t RECONNECT_SWITCH_AFTER = 2;
 
-inline WifiSource reconnectSource(WifiSource active, bool hasSaved, uint8_t& failures) {
-  if (!hasSaved) {
+inline WifiSource reconnectSource(WifiSource active, bool hasSaved, bool hasBuiltIn, uint8_t& failures) {
+  if (!hasSaved || !hasBuiltIn) {
     failures = 0;
-    return WifiSource::BuiltIn;
+    return hasSaved ? WifiSource::Saved : WifiSource::BuiltIn;
   }
   if (failures >= RECONNECT_SWITCH_AFTER) {
     failures = 0;

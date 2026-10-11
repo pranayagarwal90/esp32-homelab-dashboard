@@ -15,6 +15,7 @@
 #include "Screensaver.h"
 #include "ServicesScreen.h"
 #include "SettingsScreen.h"
+#include "SetupScreen.h"
 #include "StopwatchScreen.h"
 #include "TimeWeatherScreen.h"
 #include "WeatherScreen.h"
@@ -60,6 +61,10 @@ void handleTouch() {
   updateBacklight();
   Serial.printf("Touch X=%d Y=%d\n", x, y);
 
+  if (app.currentPage == PAGE_SETUP) {
+    handleSetupTouch(x, y);
+    return;
+  }
   if (app.currentPage == PAGE_SCREENSAVER) {
     exitScreensaver();
     return;

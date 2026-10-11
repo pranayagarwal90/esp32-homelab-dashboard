@@ -6,7 +6,7 @@
 #include <HTTPClient.h>
 #include "AiClient.h"
 #include "AiResponse.h"
-#include "ApiConfig.h"
+#include "DeviceConfig.h"
 
 static constexpr uint32_t AI_CONNECT_TIMEOUT_MS = 5000;
 // The backend may try the GPU laptop and then the HomeServer: 50 s at most,
@@ -29,7 +29,11 @@ static void runJob(const AiJob& job, AiResult& result) {
     return;
   }
   bool explain = job.type == AiJobType::Explain;
-  String url = String(API_BASE) + (explain ? "/api/ai/explain" : "/api/ai/status");
+  char url[API_URL_MAX];
+  if (!(explain ? aiExplainUrl(url, sizeof(url)) : aiStatusUrl(url, sizeof(url)))) {
+    aiSetError(response, "Dashboard server is not set");
+    return;
+  }
   WiFiClient client;
   HTTPClient http;
   http.setConnectTimeout(AI_CONNECT_TIMEOUT_MS);

@@ -1,0 +1,24 @@
+; Local PlatformIO overrides. Copy to platformio_override.ini (git-ignored);
+; platformio.ini loads it automatically. Options here replace the same
+; options in platformio.ini.
+;
+; Developer defaults (never in a public build), enabled by the build_flags
+; lines below:
+; - include/secrets.h (optional, git-ignored) adds a built-in Wi-Fi network;
+; - DASHBOARD_DEV_BACKEND_URL is written to NVS once when the display has no
+;   dashboard server stored (e.g. upgrading from firmware without one).
+
+[dev]
+build_flags =
+    ${env.build_flags}
+    -D DASHBOARD_DEV_DEFAULTS
+    '-D DASHBOARD_DEV_BACKEND_URL="http://192.0.2.10:8090"'
+
+[env:esp32dev]
+; upload_port = COM3
+; monitor_port = COM3
+; build_flags = ${dev.build_flags}
+
+[env:esp32dev-ota]
+; upload_port = 192.0.2.18
+; build_flags = ${dev.build_flags}
