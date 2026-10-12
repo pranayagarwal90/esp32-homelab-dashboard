@@ -116,6 +116,8 @@ def main(argv=None):
     with tempfile.NamedTemporaryFile("w", dir=args.out_dir, suffix=".tmp", delete=False) as tmp:
         json.dump(manifest, tmp, indent=2)
         tmp.write("\n")
+    # Readable by the backend's own user (e.g. the container's), like the .bin.
+    os.chmod(tmp.name, 0o644)
     os.replace(tmp.name, args.out_dir / "manifest.json")
 
     print(f"Release {args.version}: {args.out_dir / filename}")

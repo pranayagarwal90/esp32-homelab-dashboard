@@ -1,0 +1,24 @@
+# Allowlist: the image needs only the backend server's modules. Everything
+# else - .env, private/, *.pem, *.key, firmware sources and builds,
+# firmware-releases/, photos, tests, caches, .git - never enters the build
+# context, so it cannot end up in an image layer by accident.
+*
+!backend/server.py
+!backend/config.py
+!backend/services.py
+!backend/ai_assistant.py
+!backend/firmware_updates.py
+
+# Belt and braces, should the allowlist above ever be widened.
+.env
+.env.*
+**/.env
+private/
+**/*.pem
+**/*.key
+**/secrets.h
+.git/
+firmware/
+firmware-releases/
+**/__pycache__/
+**/test_*.py

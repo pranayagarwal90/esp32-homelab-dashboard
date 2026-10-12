@@ -211,6 +211,8 @@ class KeyTests(unittest.TestCase):
                                         "--out-dir", str(out_dir)]), 0)
         manifest = json.loads((out_dir / "manifest.json").read_text())
         self.assertEqual(manifest["manifest_version"], 2)
+        # World-readable, like the image: the backend may run as another user.
+        self.assertEqual((out_dir / "manifest.json").stat().st_mode & 0o777, 0o644)
         self.assertEqual((manifest["key_id"], manifest["notes"], manifest["size"]),
                          ("homedeck-release-test", "Signed.", len(data)))
         self.assertEqual(manifest["sha256"], hashlib.sha256(data).hexdigest())

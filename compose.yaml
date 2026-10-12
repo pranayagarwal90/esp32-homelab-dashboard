@@ -1,0 +1,45 @@
+# HomeDeck Mini backend.
+#   cp .env.example .env    # then edit .env
+#   docker compose up -d --build
+# HomeDeck Mini then uses http://<this server's LAN address>:8090
+#
+# Inside the container, localhost/127.0.0.1 is the container itself, not the
+# Docker host: point service health URLs, HOST_METRICS_URL and the Ollama URLs
+# in .env at LAN addresses (or other containers' names on a shared network).
+services:
+  homedeck-backend:
+    build: .
+    image: homedeck-backend:local
+    restart: unless-stopped
+    ports:
+      # Host port (HOMEDECK_PORT, default 8090) -> the container's 8090.
+      - "${HOMEDECK_PORT:-8090}:8090"
+    # All settings from .env (see .env.example). The values below win over
+    # .env because they describe the container, not the user's setup.
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DASHBOARD_BIND: 0.0.0.0
+      DASHBOARD_PORT: "8090"
+      DASHBOARD_PHOTOS_DIR: /data/photos
+      FIRMWARE_RELEASE_DIR: /data/firmware-releases
+      FIRMWARE_MANIFEST_FILE: /data/firmware-releases/manifest.json
+      # No Docker socket is mounted (by design), so container lookups cannot
+      # work here: give each service in SERVICES a SERVICE_<ID>_HEALTH_URL.
+      DOCKER_STATUS_ENABLED: "false"
+    volumes:
+      # Signed releases from tools/prepare-firmware-release.py; read on every
+      # request, so a new release needs no rebuild or restart.
+      - ./firmware-releases:/data/firmware-releases:ro
+      # Prepared photos (prepare_photos.py); optional, an empty folder is fine.
+      - ./photos-ready:/data/photos:ro
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    # If a service runs on this Docker host itself (Linux), you may add the
+    # line below and use http://host.docker.internal:<port> for it:
+    # extra_hosts:
+    #   - "host.docker.internal:host-gateway"

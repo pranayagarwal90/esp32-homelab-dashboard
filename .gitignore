@@ -1,6 +1,7 @@
 # Local/private photos
 photos-source/
-photos-ready/
+photos-ready/*
+!photos-ready/.gitkeep
 # Former tracked link to ../photos-ready; the API now uses DASHBOARD_PHOTOS_DIR.
 backend/photos-ready
 
@@ -23,7 +24,8 @@ htmlcov/
 backend/radar-cache/
 
 # Local firmware releases (tools/prepare-firmware-release.py)
-firmware-releases/
+firmware-releases/*
+!firmware-releases/.gitkeep
 
 # Release signing keys: private keys never enter the repository (README
 # "Firmware authenticity"). Public keys live in TrustedUpdateKeys.h, never

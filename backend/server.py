@@ -7,6 +7,7 @@ from urllib.parse import parse_qs, unquote, urlencode, urlsplit
 from urllib.request import urlopen
 from zoneinfo import ZoneInfo
 import json
+import signal
 import subprocess
 import time
 
@@ -624,6 +625,12 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self):
+        # Liveness only (Docker HEALTHCHECK, monitoring): no host, Docker,
+        # weather, AI or firmware work.
+        if self.path == "/health":
+            self.send_json({"status": "ok"})
+            return
+
         if self.path == "/api/status":
             self.send_json(get_status())
             return
@@ -744,6 +751,19 @@ if __name__ == "__main__":
           if CONFIG.firmware_updates_enabled else "disabled")
     for warning in CONFIG.warnings:
         print("Warning:", warning)
-    print("Endpoints: /api/status, /api/photos, /photos/<file>, /api/ai/status, POST /api/ai/explain,",
+    print("Endpoints: /health, /api/status, /api/photos, /photos/<file>, /api/ai/status, POST /api/ai/explain,",
           f"{UPDATE_PATH}, {DOWNLOAD_PREFIX}<file>")
-    server.serve_forever()
+
+    # SIGTERM (docker stop, systemctl stop) ends serve_forever() cleanly. As a
+    # container's PID 1, Python would otherwise ignore it until SIGKILL.
+    def stop(signum, frame):
+        raise SystemExit(0)
+
+    signal.signal(signal.SIGTERM, stop)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.server_close()
+        print("Stopped", flush=True)

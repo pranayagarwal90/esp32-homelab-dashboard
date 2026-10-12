@@ -72,6 +72,79 @@ The project has three main components:
 └─────────────────────────────────────┘
 ```
 
+# Running the HomeDeck backend
+
+HomeDeck Mini needs one backend on your network. It is a small Python
+service (standard library only) listening on port 8090. Nothing else is
+required: weather, services, photos, AI and firmware updates are optional
+and stay off until configured in `.env`.
+
+## Option 1 - Docker Compose (recommended)
+
+Needs Docker with Compose v2.24 or newer.
+
+```sh
+git clone <repository URL>
+cd <repository folder>
+cp .env.example .env      # edit later; the defaults already work
+docker compose up -d --build
+curl http://localhost:8090/health     # {"status": "ok"}
+docker compose logs -f                # logs (stdout; nothing is written to files)
+docker compose down                   # stop
+```
+
+Then, in HomeDeck Mini's setup page, enter the dashboard server as
+`http://<SERVER-LAN-IP>:8090`, the LAN address of the machine running Docker.
+
+- **Configuration** is `.env` (see `.env.example`), passed in by
+  `compose.yaml`. Compose fixes the container-side values itself: it listens
+  on 0.0.0.0:8090 and uses `/data/firmware-releases` and `/data/photos`.
+  Use `HOMEDECK_PORT=<port>` (in the shell or `.env`) to publish another host
+  port. After editing `.env`, run `docker compose up -d` again to apply it.
+- **Addresses inside the container:** `localhost` and `127.0.0.1` are the
+  container, not the Docker host. Point `SERVICE_<ID>_HEALTH_URL`,
+  `HOST_METRICS_URL` and the Ollama URLs at LAN addresses (for example
+  `http://<SERVER-LAN-IP>:8096/health`). On Linux, a service on the Docker
+  host itself can be reached as `host.docker.internal` after uncommenting the
+  `extra_hosts` lines in `compose.yaml`.
+- **Docker container detection is off** in this mode (the backend never gets
+  the Docker socket), so give every service in `SERVICES` a health URL.
+- **Folders:** `firmware-releases/` (signed releases, see "Firmware
+  authenticity") and `photos-ready/` are mounted read-only. The backend reads
+  the release manifest on every request: publishing a new release needs no
+  rebuild or restart. The container runs as an unprivileged user (uid 10001)
+  on a read-only file system, so these files only need to be readable by
+  others (the usual 644 files / 755 folders; never 777). Release signing keys
+  are never mounted or copied into the image.
+- The image contains only the backend's Python modules (`.dockerignore` is an
+  allowlist) and reports its health through `GET /health`.
+
+## Option 2 - Native Python
+
+Python 3.11 or newer; no packages to install.
+
+```sh
+cp .env.example .env
+python3 backend/server.py
+```
+
+Relative paths in `.env` are resolved from the project root. To run it as a
+service, any process manager works (for example a systemd unit with
+`WorkingDirectory=` set to the project and `ExecStart=` running
+`python3 backend/server.py`); SIGTERM stops it cleanly.
+
+## Minimal configuration
+
+A fresh `.env.example` copy is enough: the backend starts, `/api/status`
+works and HomeDeck Mini connects. Everything optional stays off: no
+`SERVICES`, no weather coordinates, no host metrics, no photos (empty list),
+AI unavailable until an Ollama URL is reachable, and
+`FIRMWARE_UPDATES_ENABLED=false`. The smallest useful edit is usually just:
+
+```sh
+DASHBOARD_TIMEZONE=Europe/London
+```
+
 # Backend configuration
 
 The backend has no deployment-specific values in its source. Everything that
