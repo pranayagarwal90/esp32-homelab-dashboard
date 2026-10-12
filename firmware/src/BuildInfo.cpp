@@ -1,4 +1,5 @@
 #include "BuildInfo.h"
+#include "ProductIdentity.h"
 
 // Recompiled on every build (scripts/build_info.py), so __DATE__/__TIME__
 // always describe the current image.
@@ -12,8 +13,13 @@
 #define DASHBOARD_BUILD_BOARD ""
 #endif
 
+// The version, behind a marker that tools/prepare-firmware-release.py looks
+// for in a firmware .bin, so a release's manifest version always matches the
+// version the image reports. Returned from here, so it is never discarded.
+static const char FIRMWARE_ID[] = FIRMWARE_ID_PREFIX HOMEDECK_PRODUCT_SLUG ":" DASHBOARD_FIRMWARE_VERSION;
+
 const char* firmwareVersion() {
-  return DASHBOARD_FIRMWARE_VERSION;
+  return FIRMWARE_ID + sizeof(FIRMWARE_ID_PREFIX HOMEDECK_PRODUCT_SLUG ":") - 1;
 }
 
 const char* firmwareBuildTime() {

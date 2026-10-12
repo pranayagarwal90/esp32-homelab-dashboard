@@ -12,6 +12,7 @@
 #include "SetupScreen.h"
 #include "StopwatchScreen.h"
 #include "TimeWeatherScreen.h"
+#include "UpdateScreen.h"
 #include "WeatherScreen.h"
 #include "games/MemoryGame.h"
 #include "games/ReactionGame.h"
@@ -43,6 +44,7 @@ void drawCurrentPage() {
     case PAGE_AI: drawAiMenuPage(); break;
     case PAGE_AI_RESULT: drawAiResultPage(); break;
     case PAGE_SETUP: drawSetupPage(); break;
+    case PAGE_UPDATE: drawUpdatePage(); break;
   }
 }
 

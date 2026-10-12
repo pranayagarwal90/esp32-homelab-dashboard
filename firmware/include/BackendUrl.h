@@ -148,9 +148,14 @@ constexpr const char* API_PHOTOS_PATH = "/api/photos";
 constexpr const char* API_AI_STATUS_PATH = "/api/ai/status";
 constexpr const char* API_AI_EXPLAIN_PATH = "/api/ai/explain";
 constexpr const char* PHOTO_FILE_PATH = "/photos/";
+constexpr const char* API_FIRMWARE_UPDATE_PATH = "/api/firmware/update";
+constexpr const char* FIRMWARE_FILE_PATH = "/firmware/";
 
 constexpr size_t API_URL_MAX = BACKEND_URL_MAX + 24;    // Longest fixed path: /api/ai/explain.
 constexpr size_t PHOTO_URL_MAX = BACKEND_URL_MAX + 96;  // /photos/ + a file name.
+// /api/firmware/update?product=...&current=65535.65535.65535, or
+// /firmware/ + a 64-character file name.
+constexpr size_t UPDATE_URL_MAX = BACKEND_URL_MAX + 80;
 
 // base + path + suffix (path starts with '/'; base has no trailing slash).
 // False, with out = "", when base is empty or the result does not fit.

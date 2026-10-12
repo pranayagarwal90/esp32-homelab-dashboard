@@ -73,7 +73,7 @@ static void updateBoot(uint32_t elapsed) {
   shownB = max(shownB, links);
   if (shownC < 1 && elapsed >= BOOT_READY_AT) {
     clearTextBand(200, 24);
-    printCentered("HOMELAB READY", 204, 2, TFT_GREEN);
+    printCentered("HOMEDECK READY", 204, 2, TFT_GREEN);
     shownC = 1;
   }
 }

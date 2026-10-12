@@ -17,7 +17,7 @@ constexpr int BOOT_LEDS = 3;
 constexpr uint32_t BOOT_LED_AT[BOOT_LEDS] = {150, 400, 650};
 constexpr int BOOT_LINKS = 3;
 constexpr uint32_t BOOT_LINK_AT[BOOT_LINKS] = {800, 900, 1000};
-constexpr uint32_t BOOT_READY_AT = 1050;   // "HOMELAB READY".
+constexpr uint32_t BOOT_READY_AT = 1050;   // "HOMEDECK READY".
 constexpr uint32_t BOOT_MS = 1300;
 
 inline int stepsReached(const uint32_t* at, int count, uint32_t elapsed) {

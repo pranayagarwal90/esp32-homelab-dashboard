@@ -250,6 +250,7 @@ g++ -std=c++11 -Wall -Wextra -Werror -Ifirmware/include firmware/test/test_provi
 # Needs ArduinoJson from a previous `pio run` (header-only):
 g++ -std=c++11 -Wall -Wextra -Werror -Ifirmware/include -Ifirmware/.pio/libdeps/esp32dev/ArduinoJson/src firmware/test/test_ai_logic.cpp -o /tmp/test-ai && /tmp/test-ai
 g++ -std=c++11 -Wall -Wextra -Werror -Ifirmware/include -Ifirmware/.pio/libdeps/esp32dev/ArduinoJson/src firmware/test/test_service_status.cpp -o /tmp/test-service-status && /tmp/test-service-status
+g++ -std=c++11 -Wall -Wextra -Werror -Ifirmware/include -Ifirmware/.pio/libdeps/esp32dev/ArduinoJson/src firmware/test/test_update.cpp -o /tmp/test-update && /tmp/test-update
 /tmp/test-settings
 /tmp/test-alerts
 /tmp/test-stopwatch
@@ -366,7 +367,52 @@ first step. Game state stays until RESTART. As before, game pages skip status
 fetches (that time does not count toward the stale-data alert); the stopwatch
 keeps normal fetching but is never repainted by status updates.
 
-## OTA update screen
+## HomeDeck Mini identity and updates (development)
+
+**Identity.** The device is *HomeDeck Mini*. Everything per-device comes from
+the last two bytes of the Wi-Fi MAC (`ProductIdentity.h`, nothing stored):
+name `HomeDeck Mini 979C`, hostname `homedeck-mini-979c`, setup hotspot
+`HomeDeck-Mini-979C`. Settings > System > Device Info shows the name,
+hostname, firmware, dashboard server and IP.
+
+**Developer ArduinoOTA vs the public updater.** ArduinoOTA (espota,
+`deploy-esp32.sh`) is compiled in only with `-D HOMEDECK_DEV_OTA`, set in the
+git-ignored `platformio_override.ini` (see the `.example`). It has no
+password and is meant for a trusted development LAN only; `deploy-esp32.sh`
+refuses to run without the flag. Public builds have no upload listener: they
+*pull* updates from their configured dashboard server. About 30 s after boot,
+then every 6 hours (or with CHECK under Settings > System > Firmware / Build),
+the device asks `GET /api/firmware/update?product=homedeck-mini&current=<version>`.
+A newer release shows a prompt (INSTALL NOW / LATER; LATER waits until the
+next restart). INSTALL streams `/firmware/<file>` into the inactive OTA slot
+while computing its SHA-256, and activates the slot only if the size and hash
+match the manifest; otherwise the running firmware stays. After restarting,
+the device shows a one-time "updated successfully" screen. Both URLs always
+derive from the dashboard server saved on the device.
+
+**Trust.** The device trusts the server it was configured with. The SHA-256
+detects a corrupted or truncated download; it does not prove who published
+the firmware, so whoever controls the backend or its release directory
+controls what devices install. Signed releases are planned as later
+hardening.
+
+**Preparing a local release.** Bump `DASHBOARD_FIRMWARE_VERSION` in
+`firmware/include/BuildInfo.h`, build, then:
+
+```sh
+python3 tools/prepare-firmware-release.py \
+  --firmware firmware/.pio/build/esp32dev/firmware.bin \
+  --version 1.1.0 --notes "HomeDeck Mini update"
+```
+
+This copies the image to `firmware-releases/homedeck-mini-1.1.0.bin`
+(git-ignored) and writes `manifest.json` (product, version, filename, size,
+sha256, notes). The tool refuses an image whose built-in version differs from
+`--version`. Serve it with `FIRMWARE_UPDATES_ENABLED=true` in `.env` (see
+`.env.example`); updates are off by default and the backend starts normally
+without any release files.
+
+## OTA update screen (developer builds)
 
 ArduinoOTA receives the whole upload inside `handleOTA()`, so the dashboard
 is paused meanwhile and the OTA screen owns the display. A six-frame

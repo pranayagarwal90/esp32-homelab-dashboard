@@ -26,7 +26,8 @@ enum Page {
   PAGE_HOMESERVER,    // Detailed host metrics (the former HOME).
   PAGE_AI,            // AI ASSISTANT menu (MORE).
   PAGE_AI_RESULT,     // One AI answer (from the menu, ALERTS or HOMESERVER).
-  PAGE_SETUP          // Setup Mode at boot (no usable configuration); no navigation.
+  PAGE_SETUP,         // Setup Mode at boot (no usable configuration); no navigation.
+  PAGE_UPDATE         // Firmware update prompt/progress/result (UpdateScreen); no navigation.
 };
 
 // Games in play own the screen: no status fetches and no status redraws.

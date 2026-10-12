@@ -6,7 +6,10 @@
 #include "BuildInfo.h"
 #include "Display.h"
 #include "DisplaySettingsScreen.h"
-#include "OtaManager.h"
+#include "DeviceConfig.h"
+#include "DeviceIdentity.h"
+#include "FirmwareUpdate.h"
+#include "UpdateScreen.h"
 #include "PageRouter.h"
 #include "PowerManager.h"
 #include "SettingsStore.h"
@@ -125,6 +128,38 @@ static void handleListTouch(const SettingsMenu& menu, int x, int y) {
 
 // --- Firmware / build -------------------------------------------------------------------
 
+static uint32_t buildDrawnRevision = 0;
+
+static void drawFirmwareButton(int x, const char* label, bool enabled) {
+  uint16_t fill = enabled ? TFT_BLUE : TFT_BLACK;
+  tft.fillRoundRect(x, FW_BUTTON_Y, FW_BUTTON_W, FW_BUTTON_H, 8, fill);
+  tft.drawRoundRect(x, FW_BUTTON_Y, FW_BUTTON_W, FW_BUTTON_H, 8, enabled ? TFT_LIGHTGREY : TFT_DARKGREY);
+  tft.setTextSize(2);
+  tft.setTextColor(enabled ? TFT_WHITE : TFT_DARKGREY, fill);
+  tft.setCursor(x + (FW_BUTTON_W - tft.textWidth(label)) / 2, FW_BUTTON_Y + 12);
+  tft.print(label);
+}
+
+// The update status line and the CHECK / INSTALL buttons.
+static void drawUpdateStatus() {
+  UpdateStatus s;
+  firmwareUpdateStatus(s);
+  buildDrawnRevision = s.revision;
+  char text[56];
+  formatUpdateStatus(text, sizeof(text), s.state, s.offer.version, s.error);
+  uint16_t color = s.state == UpdateState::Available ? TFT_CYAN
+                   : s.state == UpdateState::CheckFailed || s.state == UpdateState::Failed ? TFT_ORANGE
+                   : TFT_WHITE;
+  tft.fillRect(14, 68, 306, 10, TFT_BLACK);
+  tft.setTextSize(1);
+  tft.setTextColor(color, TFT_BLACK);
+  tft.setCursor(14, 68);
+  tft.print(text);
+  bool busy = updateBusy(s.state);
+  drawFirmwareButton(FW_CHECK_X, s.state == UpdateState::Checking ? "CHECKING" : "CHECK", !busy);
+  drawFirmwareButton(FW_INSTALL_X, "INSTALL", s.hasOffer && !busy);
+}
+
 static void drawBuildInfo() {
   drawSettingsFrame("FIRMWARE / BUILD");
   tft.setTextSize(1);
@@ -135,23 +170,43 @@ static void drawBuildInfo() {
   tft.setTextColor(TFT_WHITE, TFT_BLACK);
   tft.setCursor(110, 44);
   tft.print(firmwareVersion());
-  int y = 78;
+  int y = 86;
   drawInfoLine(y, "Build", firmwareBuildTime());
-  drawInfoLine(y += 18, "Git", firmwareGitSha());
-  drawInfoLine(y += 18, "Environment", firmwareBuildEnv());
-  drawInfoLine(y += 18, "Board", firmwareBuildBoard());
-  drawInfoLine(y += 18, "Bluetooth", BLUETOOTH_SUPPORTED ? "Included in this build" : "Not in this build");
+  drawInfoLine(y += 14, "Git", firmwareGitSha());
+  drawInfoLine(y += 14, "Environment", firmwareBuildEnv());
+  drawInfoLine(y += 14, "Board", firmwareBuildBoard());
+  drawInfoLine(y += 14, "Bluetooth", BLUETOOTH_SUPPORTED ? "Included in this build" : "Not in this build");
+  drawUpdateStatus();
+}
+
+static void handleBuildTouch(int x, int y) {
+  switch (firmwareButtonAt(x, y)) {
+    case FirmwareButton::Check:
+      if (requestUpdateCheck()) drawUpdateStatus();
+      break;
+    case FirmwareButton::Install:
+      openUpdatePromptFromSettings();
+      break;
+    case FirmwareButton::None:
+      break;
+  }
+}
+
+static void updateBuildInfo() {
+  UpdateStatus s;
+  firmwareUpdateStatus(s);
+  if (s.revision != buildDrawnRevision) drawUpdateStatus();
 }
 
 // --- Device info --------------------------------------------------------------------
 
 static constexpr uint32_t INFO_REFRESH_MS = 2000;
 static unsigned long infoLastRefresh = 0;
-static const int INFO_Y0 = 46;
-static const int INFO_PITCH = 16;
+static const int INFO_Y0 = 44;
+static const int INFO_PITCH = 14;
 
-enum InfoLine { INFO_DEVICE, INFO_SSID, INFO_IP, INFO_SIGNAL, INFO_UPTIME, INFO_HEAP, INFO_MIN_HEAP,
-                INFO_FLASH, INFO_CHIP, INFO_SDK, INFO_LINES };
+enum InfoLine { INFO_DEVICE, INFO_HOSTNAME, INFO_FIRMWARE, INFO_BACKEND, INFO_SSID, INFO_IP, INFO_SIGNAL,
+                INFO_UPTIME, INFO_HEAP, INFO_CHIP, INFO_SDK, INFO_LINES };
 
 static int infoY(int line) {
   return INFO_Y0 + line * INFO_PITCH;
@@ -159,7 +214,7 @@ static int infoY(int line) {
 
 // Values that change while the page is open.
 static void drawInfoValues() {
-  char text[40];
+  char text[40], low[16];
   bool connected = WiFi.status() == WL_CONNECTED;
   drawInfoValue(infoY(INFO_SSID), connected ? WiFi.SSID().c_str() : "(not connected)");
   drawInfoValue(infoY(INFO_IP), connected ? WiFi.localIP().toString().c_str() : "--");
@@ -168,25 +223,28 @@ static void drawInfoValues() {
   formatUptime(text, sizeof(text), millis() / 1000);
   drawInfoValue(infoY(INFO_UPTIME), text);
   formatKilobytes(text, sizeof(text), ESP.getFreeHeap());
+  formatKilobytes(low, sizeof(low), ESP.getMinFreeHeap());
+  snprintf(text + strlen(text), sizeof(text) - strlen(text), " (min %s)", low);
   drawInfoValue(infoY(INFO_HEAP), text);
-  formatKilobytes(text, sizeof(text), ESP.getMinFreeHeap());
-  drawInfoValue(infoY(INFO_MIN_HEAP), text);
   infoLastRefresh = millis();
 }
 
 static void drawDeviceInfo() {
   static const char* labels[INFO_LINES] = {
-    "Device", "Wi-Fi SSID", "IP address", "Signal", "Uptime", "Free heap", "Min free heap",
-    "Flash size", "Chip", "SDK"
+    "Device", "Hostname", "Firmware", "Backend", "Wi-Fi SSID", "IP address", "Signal", "Uptime",
+    "Free heap", "Chip", "SDK"
   };
   drawSettingsFrame("DEVICE INFO");
   for (int i = 0; i < INFO_LINES; i++) drawInfoLine(infoY(i), labels[i], "");
-  char text[40];
-  drawInfoValue(infoY(INFO_DEVICE), DEVICE_HOSTNAME);
-  snprintf(text, sizeof(text), "%u MB", unsigned(ESP.getFlashChipSize() / (1024 * 1024)));
-  drawInfoValue(infoY(INFO_FLASH), text);
-  snprintf(text, sizeof(text), "%s rev %u, %u MHz", ESP.getChipModel(), unsigned(ESP.getChipRevision()),
-           unsigned(ESP.getCpuFreqMHz()));
+  char text[48];
+  drawInfoValue(infoY(INFO_DEVICE), deviceIdentity().name);
+  drawInfoValue(infoY(INFO_HOSTNAME), deviceIdentity().hostname);
+  snprintf(text, sizeof(text), "%s (%s)", firmwareVersion(), firmwareGitSha());
+  drawInfoValue(infoY(INFO_FIRMWARE), text);
+  formatBackendForDisplay(backendUrl(), text, sizeof(text), 34);
+  drawInfoValue(infoY(INFO_BACKEND), text);
+  snprintf(text, sizeof(text), "%s rev %u, %u MHz, %u MB", ESP.getChipModel(), unsigned(ESP.getChipRevision()),
+           unsigned(ESP.getCpuFreqMHz()), unsigned(ESP.getFlashChipSize() / (1024 * 1024)));
   drawInfoValue(infoY(INFO_CHIP), text);
   drawInfoValue(infoY(INFO_SDK), ESP.getSdkVersion());
   drawInfoValues();
@@ -386,6 +444,7 @@ void handleSettingsTouch(int x, int y) {
     case SettingsView::Wifi: handleWifiSettingsTouch(x, y); break;
     case SettingsView::Server: handleServerSettingsTouch(x, y); break;
     case SettingsView::Bluetooth: handleBluetoothTouch(x, y); break;
+    case SettingsView::Build: handleBuildTouch(x, y); break;
     default: {
       SettingsMenu menu;
       if (settingsMenuFor(view, menu)) handleListTouch(menu, x, y);
@@ -400,6 +459,7 @@ void updateSettings() {
   updateWifiSetup();
   if (app.currentPage != PAGE_SETTINGS) return;
   if (view == SettingsView::Info && millis() - infoLastRefresh >= INFO_REFRESH_MS) drawInfoValues();
+  if (view == SettingsView::Build) updateBuildInfo();
   if (view == SettingsView::Wifi) updateWifiSettings();
   if (view == SettingsView::Server) updateServerSettings();
   if (view == SettingsView::WifiSetup) updateWifiSetupView();

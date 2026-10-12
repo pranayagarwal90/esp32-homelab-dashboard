@@ -43,6 +43,8 @@ DEFAULT_HOST_LABEL = "Server"
 # Relative paths are resolved against PROJECT_ROOT (where .env lives), never
 # against the process working directory.
 DEFAULT_PHOTOS_DIR = "./photos-ready"
+DEFAULT_FIRMWARE_RELEASE_DIR = "./firmware-releases"
+MANIFEST_NAME = "manifest.json"
 
 DEFAULT_AI_PRIMARY_MODEL = "qwen2.5:7b"
 DEFAULT_AI_FALLBACK_URL = "http://127.0.0.1:11434"
@@ -231,6 +233,9 @@ class Config:
     enabled_services: tuple = ()           # SERVICES ids, in registry order.
     service_urls: dict = field(default_factory=dict)  # Enabled id -> health URL (when set).
     ai: AiConfig = AiConfig("", DEFAULT_AI_PRIMARY_MODEL, DEFAULT_AI_FALLBACK_URL, DEFAULT_AI_FALLBACK_MODEL)
+    firmware_updates_enabled: bool = False  # HomeDeck Mini pull updates (firmware_updates.py).
+    firmware_release_dir: Path = PROJECT_ROOT / "firmware-releases"
+    firmware_manifest_file: Path = PROJECT_ROOT / "firmware-releases" / MANIFEST_NAME
     env_file: Path = None                   # The file that was read, if any.
     warnings: tuple = ()
 
@@ -366,6 +371,9 @@ def load(environ=None, env_file=None):
     if re.search(r"\s", bind):
         raise ConfigError(f"DASHBOARD_BIND={bind!r}: expected an address or host name")
 
+    release_dir = resolve_path(get_string(source, "FIRMWARE_RELEASE_DIR", DEFAULT_FIRMWARE_RELEASE_DIR))
+    manifest = get_string(source, "FIRMWARE_MANIFEST_FILE", "")
+
     return Config(
         bind=bind,
         port=get_int(source, "DASHBOARD_PORT", DEFAULT_PORT, 1, 65535),
@@ -379,6 +387,9 @@ def load(environ=None, env_file=None):
         enabled_services=enabled_services,
         service_urls=_service_urls(source, enabled_services, warnings),
         ai=_ai(source, warnings),
+        firmware_updates_enabled=get_bool(source, "FIRMWARE_UPDATES_ENABLED", False),
+        firmware_release_dir=release_dir,
+        firmware_manifest_file=resolve_path(manifest) if manifest else release_dir / MANIFEST_NAME,
         env_file=path if path and path.is_file() else None,
         warnings=tuple(warnings),
     )

@@ -18,6 +18,7 @@
 #include "SetupScreen.h"
 #include "StopwatchScreen.h"
 #include "TimeWeatherScreen.h"
+#include "UpdateScreen.h"
 #include "WeatherScreen.h"
 #include "games/MemoryGame.h"
 #include "games/ReactionGame.h"
@@ -67,6 +68,10 @@ void handleTouch() {
   }
   if (app.currentPage == PAGE_SCREENSAVER) {
     exitScreensaver();
+    return;
+  }
+  if (app.currentPage == PAGE_UPDATE) {
+    handleUpdateTouch(x, y);
     return;
   }
   if (app.currentPage == PAGE_TTT) {

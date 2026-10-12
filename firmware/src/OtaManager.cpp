@@ -1,11 +1,15 @@
 #include <Arduino.h>
+#include "OtaManager.h"
+
+#ifdef HOMEDECK_DEV_OTA
+
 #include <ArduinoOTA.h>
 #include <Update.h>
-#include "OtaManager.h"
+#include "DeviceIdentity.h"
 #include "OtaAnimation.h"
 
 void setupOTA() {
-  ArduinoOTA.setHostname(DEVICE_HOSTNAME);
+  ArduinoOTA.setHostname(deviceIdentity().hostname);
 
   // The upload runs inside ArduinoOTA.handle(); these callbacks draw the
   // walking-man screen (OtaAnimation) while loop() is stalled.
@@ -30,10 +34,21 @@ void setupOTA() {
   });
 
   ArduinoOTA.begin();
-  Serial.printf("OTA ready: %s\n", DEVICE_HOSTNAME);
+  Serial.printf("Developer OTA ready: %s\n", deviceIdentity().hostname);
 }
 
 bool handleOTA() {
   ArduinoOTA.handle();
   return otaAnimationService();
 }
+
+#else
+
+// Public build: no network upload listener.
+void setupOTA() {}
+
+bool handleOTA() {
+  return false;
+}
+
+#endif

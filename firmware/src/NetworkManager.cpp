@@ -3,6 +3,7 @@
 #include <freertos/semphr.h>
 #include "NetworkManager.h"
 #include "DevDefaults.h"
+#include "DeviceIdentity.h"
 #include "ProvisioningLogic.h"
 #include "SystemAnimation.h"
 
@@ -94,6 +95,7 @@ void initNetwork() {
   savedAvailable = loadSavedWifi(savedCredentials);
   WiFi.onEvent([](arduino_event_id_t, arduino_event_info_t) { gotIp = true; },
                ARDUINO_EVENT_WIFI_STA_GOT_IP);
+  WiFi.setHostname(deviceIdentity().hostname); // DHCP name; must precede WiFi.mode().
   WiFi.mode(WIFI_STA);
 }
 

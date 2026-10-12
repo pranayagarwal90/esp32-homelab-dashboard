@@ -6,7 +6,9 @@
 #include "BluetoothControl.h"
 #include "CalendarScreen.h"
 #include "DeviceConfig.h"
+#include "DeviceIdentity.h"
 #include "Display.h"
+#include "FirmwareUpdate.h"
 #include "NetworkManager.h"
 #include "OtaManager.h"
 #include "PageRouter.h"
@@ -19,6 +21,7 @@
 #include "StatusClient.h"
 #include "StopwatchScreen.h"
 #include "TouchHandler.h"
+#include "UpdateScreen.h"
 #include "WeatherScreen.h"
 #include "games/MemoryGame.h"
 #include "games/ReactionGame.h"
@@ -32,6 +35,7 @@ TFT_eSPI tft = TFT_eSPI();
 void setup() {
   Serial.begin(115200);
   delay(500);
+  initDeviceIdentity();
   logWakeReason();
 
   loadSettings();
@@ -54,12 +58,14 @@ void setup() {
     return;
   }
 
-  setupOTA();
+  setupOTA(); // Developer builds only (HOMEDECK_DEV_OTA); a no-op otherwise.
   randomSeed(micros());
 
   setupBluetooth();
   setupStatusWorker();
-  drawCurrentPage();
+  char installed[UPDATE_VERSION_MAX];
+  if (beginFirmwareUpdates(installed, sizeof(installed))) showUpdateSuccess(installed);
+  else drawCurrentPage();
   fetchHomelabStatus();
   requestPhotoList();
 
@@ -76,6 +82,7 @@ void loop() {
   }
   if (handleOTA()) return;
   if (updatePower()) return;
+  if (updateUpdateScreen()) return; // Installing an update: nothing else runs.
   handleTouch();
   updateReactionGame();
   updateStopwatch();

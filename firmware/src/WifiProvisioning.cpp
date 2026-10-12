@@ -7,6 +7,7 @@
 #include <freertos/queue.h>
 #include "WifiProvisioning.h"
 #include "DeviceConfig.h"
+#include "DeviceIdentity.h"
 #include "NetworkManager.h"
 #include "PowerManager.h"
 #include "ProvisioningLogic.h"
@@ -101,11 +102,11 @@ static String htmlEscape(const char* text) {
 static const char PAGE_HEAD[] PROGMEM =
   "<!doctype html><html><head><meta charset=utf-8>"
   "<meta name=viewport content='width=device-width,initial-scale=1'>"
-  "<title>Homelab Display Setup</title><style>"
+  "<title>HomeDeck Mini Setup</title><style>"
   "body{font-family:sans-serif;max-width:420px;margin:1.5em auto;padding:0 1em}"
   "input,button{box-sizing:border-box;width:100%;padding:.6em;margin:.3em 0 .8em;font-size:1em}"
   "small{color:#555}.err{color:#b00}"
-  "</style></head><body><h2>Homelab Display Setup</h2>";
+  "</style></head><body><h2>HomeDeck Mini Setup</h2>";
 
 static const char* serverCheckText() {
   switch (serverCheck) {
@@ -264,7 +265,7 @@ static void sendForm(int code, const char* error, const char* ssid, const char* 
           "<label>Dashboard Server<input name=server required maxlength=127 inputmode=url "
           "autocapitalize=off autocorrect=off spellcheck=false placeholder=\"http://192.168.1.50:8090\" value=\"";
   page += htmlEscape(backend);
-  page += "\"></label><small>Enter the address of the Homelab Dashboard backend, "
+  page += "\"></label><small>Enter the address of your dashboard server, "
           "for example http://192.168.1.50:8090 (no /api/status).</small>"
           "<button>Save and connect</button></form><p>";
   page += scanBusy(scan) ? "Scanning for networks... <a href=/>reload</a> in a few seconds."
@@ -405,9 +406,7 @@ static void setPhase(WifiSetupPhase next) {
 
 static void makeApCredentials() {
   static const char alphabet[] = "abcdefghjkmnpqrstuvwxyz23456789"; // No 0/O/1/l/i.
-  uint8_t mac[6];
-  WiFi.macAddress(mac);
-  snprintf(apSsid, sizeof(apSsid), "Homelab-Setup-%02X%02X", mac[4], mac[5]);
+  snprintf(apSsid, sizeof(apSsid), "%s", deviceIdentity().setupAp); // HomeDeck-Mini-XXXX
   for (int i = 0; i < 8; i++) apPassword[i] = alphabet[esp_random() % (sizeof(alphabet) - 1)];
   apPassword[8] = '\0';
 }

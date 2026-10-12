@@ -17,7 +17,7 @@ WINDOWS_PIO_PS='C:\Users\Deepika\.platformio\penv\Scripts\platformio.exe'
 
 echo
 echo "========================================"
-echo " ESP32 Homelab Dashboard Deployment"
+echo " HomeDeck Mini developer deployment"
 echo "========================================"
 echo
 
@@ -45,6 +45,14 @@ fi
 # (see firmware/platformio_override.ini.example); the OTA upload needs it.
 if [ ! -f "$FIRMWARE_DIR/platformio_override.ini" ]; then
     echo "ERROR: firmware/platformio_override.ini not found (OTA upload_port)."
+    exit 1
+fi
+
+# Only developer builds (-D HOMEDECK_DEV_OTA) keep the ArduinoOTA listener;
+# deploying any other build would leave the display reachable by USB only.
+if ! grep -Eq '^[[:space:]]*-D[[:space:]]*HOMEDECK_DEV_OTA' "$FIRMWARE_DIR/platformio_override.ini"; then
+    echo "ERROR: firmware/platformio_override.ini does not enable -D HOMEDECK_DEV_OTA."
+    echo "  See firmware/platformio_override.ini.example."
     exit 1
 fi
 

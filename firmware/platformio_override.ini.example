@@ -6,12 +6,18 @@
 ; lines below:
 ; - include/secrets.h (optional, git-ignored) adds a built-in Wi-Fi network;
 ; - DASHBOARD_DEV_BACKEND_URL is written to NVS once when the display has no
-;   dashboard server stored (e.g. upgrading from firmware without one).
+;   dashboard server stored (e.g. upgrading from firmware without one);
+; - HOMEDECK_DEV_OTA starts the ArduinoOTA (espota) listener, with no
+;   password, for deploy-esp32.sh on a trusted development LAN. Public builds
+;   never have it: they update by pulling releases from their dashboard
+;   server. A build without it cannot be uploaded over the network again,
+;   so flash such a build over USB.
 
 [dev]
 build_flags =
     ${env.build_flags}
     -D DASHBOARD_DEV_DEFAULTS
+    -D HOMEDECK_DEV_OTA
     '-D DASHBOARD_DEV_BACKEND_URL="http://192.0.2.10:8090"'
 
 [env:esp32dev]

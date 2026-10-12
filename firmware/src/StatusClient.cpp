@@ -341,7 +341,7 @@ void processStatusResult() {
     if (redraw && !isGamePlayPage(app.currentPage) && app.currentPage != PAGE_GAMES &&
         app.currentPage != PAGE_PHOTOS && app.currentPage != PAGE_SCREENSAVER &&
         app.currentPage != PAGE_STOPWATCH && app.currentPage != PAGE_AI &&
-        app.currentPage != PAGE_AI_RESULT) drawCurrentPage();
+        app.currentPage != PAGE_AI_RESULT && app.currentPage != PAGE_UPDATE) drawCurrentPage();
   } else {
     bool alertsChanged = alertsOnFetchFailed();
     bool redrawn = false;
@@ -349,7 +349,7 @@ void processStatusResult() {
       app.serverOnline = false;
       if (result.outcome == StatusOutcome::ReconnectFailed && app.currentPage != PAGE_SCREENSAVER &&
           !isGamePlayPage(app.currentPage) && app.currentPage != PAGE_STOPWATCH &&
-          app.currentPage != PAGE_AI && app.currentPage != PAGE_AI_RESULT) {
+          app.currentPage != PAGE_AI && app.currentPage != PAGE_AI_RESULT && app.currentPage != PAGE_UPDATE) {
         drawCurrentPage();
         redrawn = true;
       }

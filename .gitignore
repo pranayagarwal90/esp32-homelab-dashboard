@@ -22,6 +22,9 @@ htmlcov/
 # Generated caches
 backend/radar-cache/
 
+# Local firmware releases (tools/prepare-firmware-release.py)
+firmware-releases/
+
 # Virtual environments
 .venv/
 venv/

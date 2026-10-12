@@ -6,6 +6,8 @@
 // Firmware build metadata. The release version below is the single source of
 // truth: bump it manually for each release (it never changes by itself).
 #define DASHBOARD_FIRMWARE_VERSION "1.0.0"
+// Marker in the image: FIRMWARE_ID_PREFIX "<product>:<version>" (BuildInfo.cpp).
+#define FIRMWARE_ID_PREFIX "HOMEDECK-FIRMWARE:"
 
 // Read-only values, compiled into BuildInfo.cpp only. The git SHA and
 // PlatformIO environment come from scripts/build_info.py and fall back to

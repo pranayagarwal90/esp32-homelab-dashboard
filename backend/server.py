@@ -3,7 +3,7 @@ from http.client import HTTPConnection, HTTPSConnection
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, time as datetime_time, timedelta
 from pathlib import Path
-from urllib.parse import unquote, urlencode, urlsplit
+from urllib.parse import parse_qs, unquote, urlencode, urlsplit
 from urllib.request import urlopen
 from zoneinfo import ZoneInfo
 import json
@@ -11,6 +11,7 @@ import subprocess
 import time
 
 from ai_assistant import AiAssistant, RequestError, default_engines
+from firmware_updates import DOWNLOAD_PREFIX, UPDATE_PATH, ReleaseStore
 from services import SERVICE_IDS, SERVICES_BY_ID
 import config
 
@@ -580,6 +581,10 @@ def get_status():
 # Read-only AI explanations from local Ollama; context from get_status().
 AI = AiAssistant(lambda: get_status(), *default_engines(CONFIG.ai))
 
+# HomeDeck Mini pull updates; off unless FIRMWARE_UPDATES_ENABLED=true.
+RELEASES = ReleaseStore(CONFIG.firmware_updates_enabled, CONFIG.firmware_release_dir,
+                        CONFIG.firmware_manifest_file)
+
 
 class Handler(BaseHTTPRequestHandler):
     def send_json(self, payload, status=200):
@@ -625,7 +630,48 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(data)
             return
 
+        route = urlsplit(self.path)
+        if route.path == UPDATE_PATH:
+            try:
+                query = parse_qs(route.query, max_num_fields=4)
+            except ValueError:
+                query = {}
+            product = (query.get("product") or [""])[0]
+            current = (query.get("current") or [""])[0]
+            status, payload = RELEASES.check(product, current)
+            self.send_json(payload, status)
+            return
+
+        if self.path.startswith(DOWNLOAD_PREFIX):
+            # The raw name, never decoded: it must equal the manifest's file name.
+            self.send_firmware(self.path[len(DOWNLOAD_PREFIX):])
+            return
+
         self.send_error(404)
+
+    def send_firmware(self, filename):
+        release = RELEASES.download(filename)
+        if release is None:
+            self.send_error(404)
+            return
+        try:
+            file = open(release.path, "rb")
+        except OSError:
+            self.send_error(404)
+            return
+        with file:
+            self.send_response(200)
+            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header("Content-Length", str(release.size))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            remaining = release.size
+            while remaining > 0:
+                block = file.read(min(65536, remaining))
+                if not block:
+                    break  # Changed on disk: the client sees a short body and rejects it.
+                self.wfile.write(block)
+                remaining -= len(block)
 
     def do_POST(self):
         if self.path != "/api/ai/explain":
@@ -667,7 +713,10 @@ if __name__ == "__main__":
     print("Photos:", CONFIG.photos_dir, f"(unusable: {photos_problem})" if photos_problem else "")
     print("AI primary:", f"{AI.primary.model} (configured)" if AI.primary else "not configured")
     print("AI fallback:", AI.fallback.model)
+    print("Firmware updates:", f"enabled ({CONFIG.firmware_manifest_file})"
+          if CONFIG.firmware_updates_enabled else "disabled")
     for warning in CONFIG.warnings:
         print("Warning:", warning)
-    print("Endpoints: /api/status, /api/photos, /photos/<file>, /api/ai/status, POST /api/ai/explain")
+    print("Endpoints: /api/status, /api/photos, /photos/<file>, /api/ai/status, POST /api/ai/explain,",
+          f"{UPDATE_PATH}, {DOWNLOAD_PREFIX}<file>")
     server.serve_forever()
