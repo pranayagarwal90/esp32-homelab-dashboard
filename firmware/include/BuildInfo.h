@@ -5,7 +5,7 @@
 
 // Firmware build metadata. The release version below is the single source of
 // truth: bump it manually for each release (it never changes by itself).
-#define DASHBOARD_FIRMWARE_VERSION "1.0.0"
+#define DASHBOARD_FIRMWARE_VERSION "1.0.2"
 // Marker in the image: FIRMWARE_ID_PREFIX "<product>:<version>" (BuildInfo.cpp).
 #define FIRMWARE_ID_PREFIX "HOMEDECK-FIRMWARE:"
 
