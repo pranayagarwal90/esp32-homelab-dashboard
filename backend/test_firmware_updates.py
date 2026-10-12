@@ -1,5 +1,6 @@
 """Firmware update API tests: temporary release directories and a local test
 server only; never reads the developer's .env or real release files."""
+import base64
 import hashlib
 import io
 import json
@@ -16,7 +17,8 @@ from unittest.mock import patch
 
 import config
 import firmware_updates
-from firmware_updates import ManifestError, ReleaseStore, parse_version, validate_manifest
+from firmware_updates import (ManifestError, ReleaseStore, canonical_payload, decode_signature, parse_version,
+                              validate_manifest)
 
 # Hermetic: never read the developer's .env.
 with patch.dict(os.environ, {"DASHBOARD_ENV_FILE": ""}), patch("http.server.HTTPServer"), \
@@ -28,9 +30,16 @@ FIRMWARE = bytes([0xE9]) + bytes(range(256)) * 40 + b"homedeck"
 SHA = hashlib.sha256(FIRMWARE).hexdigest()
 
 
+# The backend never verifies signatures: an opaque, well-formed one is enough
+# here (real signatures: tools/test_release_signing.py).
+SIGNATURE = base64.b64encode(bytes(range(64))).decode()
+
+
 def manifest(**changes):
-    data = {"product": "homedeck-mini", "version": "1.1.0", "filename": "homedeck-mini-1.1.0.bin",
-            "size": len(FIRMWARE), "sha256": SHA, "notes": "Improved Wi-Fi setup and stability."}
+    data = {"manifest_version": 2, "product": "homedeck-mini", "version": "1.1.0",
+            "filename": "homedeck-mini-1.1.0.bin", "size": len(FIRMWARE), "sha256": SHA,
+            "notes": "Improved Wi-Fi setup and stability.", "key_id": "homedeck-release-2026",
+            "signature": SIGNATURE}
     data.update(changes)
     return {key: value for key, value in data.items() if value is not None}
 
@@ -75,12 +84,50 @@ class VersionTests(unittest.TestCase):
 
 class ManifestValidationTests(unittest.TestCase):
     def test_valid_manifest(self):
-        fields = validate_manifest(manifest(sha256=SHA.upper()))
-        self.assertEqual(fields, ("homedeck-mini", "1.1.0", "homedeck-mini-1.1.0.bin", len(FIRMWARE),
-                                  SHA, "Improved Wi-Fi setup and stability."))
+        m = validate_manifest(manifest(sha256=SHA.upper()))
+        self.assertEqual((m.manifest_version, m.product, m.version, m.filename, m.size, m.sha256, m.notes,
+                          m.key_id, m.signature),
+                         (2, "homedeck-mini", "1.1.0", "homedeck-mini-1.1.0.bin", len(FIRMWARE), SHA,
+                          "Improved Wi-Fi setup and stability.", "homedeck-release-2026", SIGNATURE))
 
-    def test_notes_are_optional(self):
-        self.assertEqual(validate_manifest(manifest(notes=None))[5], "")
+    def test_notes_are_optional_and_never_altered(self):
+        self.assertEqual(validate_manifest(manifest(notes=None)).notes, "")
+        # Signed exactly as written: never trimmed.
+        self.assertEqual(validate_manifest(manifest(notes=" padded ")).notes, " padded ")
+
+    def test_unsigned_and_signature_format(self):
+        sig = bytes(range(64))
+        cases = {
+            "version 1 (unsigned)": manifest(manifest_version=1, key_id=None, signature=None),
+            "no manifest_version": manifest(manifest_version=None),
+            "manifest_version 3": manifest(manifest_version=3),
+            "manifest_version string": manifest(manifest_version="2"),
+            "manifest_version bool": manifest(manifest_version=True),
+            "missing key_id": manifest(key_id=None),
+            "bad key_id": manifest(key_id="Release 2026"),
+            "long key_id": manifest(key_id="k" * 33),
+            "missing signature": manifest(signature=None),
+            "invalid base64": manifest(signature="!" * 88),
+            "truncated": manifest(signature=base64.b64encode(sig[:63]).decode()),
+            "too long": manifest(signature=base64.b64encode(sig + b"x").decode()),
+            "unpadded": manifest(signature=base64.b64encode(sig).decode().rstrip("=")),
+            "whitespace": manifest(signature=" " + base64.b64encode(sig).decode()),
+            "url-safe alphabet": manifest(signature=base64.urlsafe_b64encode(bytes([0xFB] * 64)).decode()),
+        }
+        for name, data in cases.items():
+            with self.subTest(name), self.assertRaises(ManifestError):
+                validate_manifest(data)
+        self.assertEqual(decode_signature(SIGNATURE), sig)
+        # Non-canonical trailing bits are refused: one signature, one spelling.
+        self.assertIsNone(decode_signature(SIGNATURE[:85] + "B=="))
+
+    def test_canonical_payload_format(self):
+        payload = canonical_payload(2, "homedeck-mini", "1.0.2", "homedeck-mini-1.0.2.bin", 1069000, "AB" * 32,
+                                    "Improved reliability.", "homedeck-release-2026")
+        self.assertEqual(payload, (b"HOMEDECK-MANIFEST-SIGNATURE\nmanifest_version=1:2\nproduct=13:homedeck-mini\n"
+                                   b"version=5:1.0.2\nfilename=23:homedeck-mini-1.0.2.bin\nsize=7:1069000\n"
+                                   b"sha256=64:" + b"ab" * 32 + b"\nnotes=21:Improved reliability.\n"
+                                   b"key_id=21:homedeck-release-2026\n"))
 
     def test_rejected(self):
         cases = {
@@ -146,8 +193,12 @@ class ReleaseStoreTests(unittest.TestCase):
         with ReleaseDir(manifest()) as rel:
             status, payload = rel.store.check("homedeck-mini", "1.0.0")
             self.assertEqual(status, 200)
-            self.assertEqual(payload, {"available": True, "version": "1.1.0", "size": len(FIRMWARE),
-                                       "sha256": SHA, "notes": "Improved Wi-Fi setup and stability.",
+            # Every signed field, unchanged, plus the download path.
+            self.assertEqual(payload, {"available": True, "manifest_version": 2, "product": "homedeck-mini",
+                                       "version": "1.1.0", "filename": "homedeck-mini-1.1.0.bin",
+                                       "size": len(FIRMWARE), "sha256": SHA,
+                                       "notes": "Improved Wi-Fi setup and stability.",
+                                       "key_id": "homedeck-release-2026", "signature": SIGNATURE,
                                        "url": "/firmware/homedeck-mini-1.1.0.bin"})
             self.assertNotIn(str(rel.dir), json.dumps(payload))  # No filesystem paths.
 

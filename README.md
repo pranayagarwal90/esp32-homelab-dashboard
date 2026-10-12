@@ -255,6 +255,9 @@ g++ -std=c++11 -Wall -Wextra -Werror -Ifirmware/include firmware/test/test_provi
 g++ -std=c++11 -Wall -Wextra -Werror -Ifirmware/include -Ifirmware/.pio/libdeps/esp32dev/ArduinoJson/src firmware/test/test_ai_logic.cpp -o /tmp/test-ai && /tmp/test-ai
 g++ -std=c++11 -Wall -Wextra -Werror -Ifirmware/include -Ifirmware/.pio/libdeps/esp32dev/ArduinoJson/src firmware/test/test_service_status.cpp -o /tmp/test-service-status && /tmp/test-service-status
 g++ -std=c++11 -Wall -Wextra -Werror -Ifirmware/include -Ifirmware/.pio/libdeps/esp32dev/ArduinoJson/src firmware/test/test_update.cpp -o /tmp/test-update && /tmp/test-update
+g++ -std=c++11 -Wall -Wextra -Werror -Ifirmware/include -Ifirmware/.pio/libdeps/esp32dev/ArduinoJson/src firmware/test/test_manifest_signature.cpp -o /tmp/test-manifest-signature && /tmp/test-manifest-signature
+# Release signing with real ECDSA (needs the openssl command):
+python3 -m unittest discover -s tools -p 'test_*.py'
 /tmp/test-settings
 /tmp/test-alerts
 /tmp/test-stopwatch
@@ -394,27 +397,64 @@ match the manifest; otherwise the running firmware stays. After restarting,
 the device shows a one-time "updated successfully" screen. Both URLs always
 derive from the dashboard server saved on the device.
 
-**Trust.** The device trusts the server it was configured with. The SHA-256
-detects a corrupted or truncated download; it does not prove who published
-the firmware, so whoever controls the backend or its release directory
-controls what devices install. Signed releases are planned as later
-hardening.
-
-**Preparing a local release.** Bump `DASHBOARD_FIRMWARE_VERSION` in
+**Preparing a signed release.** Bump `DASHBOARD_FIRMWARE_VERSION` in
 `firmware/include/BuildInfo.h`, build, then:
 
 ```sh
 python3 tools/prepare-firmware-release.py \
   --firmware firmware/.pio/build/esp32dev/firmware.bin \
-  --version 1.1.0 --notes "HomeDeck Mini update"
+  --version 1.1.0 --notes "HomeDeck Mini update" \
+  --signing-key <path to the release private key> --key-id homedeck-release-2026
 ```
 
 This copies the image to `firmware-releases/homedeck-mini-1.1.0.bin`
-(git-ignored) and writes `manifest.json` (product, version, filename, size,
-sha256, notes). The tool refuses an image whose built-in version differs from
-`--version`. Serve it with `FIRMWARE_UPDATES_ENABLED=true` in `.env` (see
-`.env.example`); updates are off by default and the backend starts normally
-without any release files.
+(git-ignored) and writes a signed `manifest.json` (version 2). The tool
+refuses an image whose built-in version differs from `--version`, a key that
+is not EC P-256, and any signature it cannot verify itself. Serve it with
+`FIRMWARE_UPDATES_ENABLED=true` in `.env` (see `.env.example`); updates are
+off by default and the backend starts normally without any release files.
+Unsigned (version 1) manifests are no longer served.
+
+## Firmware authenticity
+
+- **Public keys on the device.** Every HomeDeck Mini firmware contains the
+  release *public* keys it trusts (`firmware/include/TrustedUpdateKeys.h`,
+  two slots). Private keys are never in firmware, the backend, `.env` or this
+  repository (`private/`, `*.pem` and `*.key` are git-ignored as a safety net).
+- **Signed offline.** A release manifest is signed at release time, on the
+  release maker's machine, with ECDSA P-256 over SHA-256 of a canonical
+  payload: `HOMEDECK-MANIFEST-SIGNATURE\n`, then
+  `name=<length>:<value>\n` for `manifest_version`, `product`, `version`,
+  `filename`, `size`, `sha256`, `notes`, `key_id` (in that order, ASCII). The
+  manifest carries `key_id` and `signature` (base64 of the raw 64-byte
+  r||s). The backend only stores and serves it; it never signs or verifies.
+- **Two checks.** The signature proves the release metadata, including the
+  firmware's SHA-256, came from a trusted key holder; the SHA-256 then
+  proves the downloaded image is exactly that firmware. The device verifies
+  the signature before it shows "Update available" (otherwise: "Update
+  verification failed"), and compares the image hash before activating it.
+  Unsigned manifests, unknown key ids and bad signatures are refused. Before
+  its first verification each boot the device runs a known-answer test of
+  its verifier with a throwaway TEST key that is never trusted for updates.
+- **Creating a release key.** `tools/generate-release-key.py --key-id <id>
+  --out <file outside the repository>` creates an encrypted P-256 key and
+  prints the public key to paste into a free slot of `TrustedUpdateKeys.h`.
+  Until a key is added there, no update verifies (the safe default).
+- **Rotating keys.** (1) Releases are signed with key A; firmware trusts
+  {A}. (2) Generate key B; publish a release *signed with A* whose firmware
+  trusts {A, B}. (3) Once devices run it, sign releases with B. (4) A later
+  release may drop A ({B}). A device that skipped step 2 needs a step-2
+  release before it can accept B-signed ones.
+- **Limits.** If a trusted key is compromised before devices also trust its
+  successor, rotation cannot protect them: whoever holds it can sign updates
+  those devices accept until they install a release that drops it. An
+  offline root key or revocation scheme could address this later. Also not
+  covered yet: HTTPS (the transport is plain HTTP on the LAN; the signature,
+  not the transport, provides authenticity), Secure Boot and Flash
+  Encryption (someone with physical access can flash anything over USB),
+  and revocation of individual releases (devices never accept an older or
+  equal version, but a signed release that later proves faulty stays
+  installable on devices still running an older one).
 
 ## OTA update screen (developer builds)
 

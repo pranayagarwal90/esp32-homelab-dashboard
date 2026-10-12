@@ -7,9 +7,9 @@
 
 // Pure HomeDeck Mini pull-update logic, shared with host tests: versions,
 // offer validation, URLs, check cadence, the prompt rule, the post-update
-// marker and the text the screens show. The device trusts only the backend
-// it was configured with; the SHA-256 guards the download against
-// corruption, not against a compromised backend (no signatures yet).
+// marker and the text the screens show. Offers come only from signed
+// manifests (ManifestSignature.h): the signature authenticates the release,
+// including its SHA-256, and the SHA-256 authenticates the downloaded image.
 
 // --- Versions -------------------------------------------------------------------------
 
@@ -65,9 +65,10 @@ constexpr size_t UPDATE_NOTES_MAX = 201; // 200 characters + terminator.
 struct UpdateOffer {
   char version[UPDATE_VERSION_MAX];
   uint32_t size;
-  uint8_t sha256[32];
+  uint8_t sha256[32];           // Covered by the manifest signature.
   char file[UPDATE_FILE_MAX];   // Under /firmware/ on the configured backend.
-  char notes[UPDATE_NOTES_MAX]; // Printable ASCII.
+  char notes[UPDATE_NOTES_MAX]; // Printable ASCII, exactly as signed.
+  char keyId[33];               // The trusted key that signed it (log only).
 };
 
 inline int hexValue(char c) {
@@ -112,16 +113,18 @@ inline bool firmwareFileFromUrl(const char* url, char* out, size_t size) {
   return true;
 }
 
-// Release notes for the size-1 font: printable ASCII, others become spaces.
-inline void copyUpdateNotes(const char* notes, char* out, size_t size) {
+// Release notes are signed, so they are taken exactly or not at all:
+// printable ASCII (the size-1 font), at most 200 characters.
+inline bool validUpdateNotes(const char* notes) {
+  if (!notes) return true;
   size_t n = 0;
-  for (const char* p = notes ? notes : ""; *p && n + 1 < size; p++) {
-    out[n++] = (*p >= ' ' && *p <= '~') ? *p : ' ';
+  for (const char* p = notes; *p; p++, n++) {
+    if (*p < ' ' || *p > '~') return false;
   }
-  out[n] = '\0';
+  return n < UPDATE_NOTES_MAX;
 }
 
-enum class OfferError : uint8_t { None, Version, NotNewer, Size, TooLarge, Sha, Url };
+enum class OfferError : uint8_t { None, Version, NotNewer, Size, TooLarge, Sha, Url, Notes };
 
 // Validates an "available" answer. maxSize is the device's OTA slot size.
 inline OfferError validateUpdateOffer(const char* current, const char* version, uint32_t size, const char* sha,
@@ -134,9 +137,10 @@ inline OfferError validateUpdateOffer(const char* current, const char* version, 
   if (size > maxSize) return OfferError::TooLarge;
   if (!parseSha256Hex(sha, out.sha256)) return OfferError::Sha;
   if (!firmwareFileFromUrl(url, out.file, sizeof(out.file))) return OfferError::Url;
+  if (!validUpdateNotes(notes)) return OfferError::Notes;
   strcpy(out.version, version); // parseSemVer bounds it to 17 characters.
   out.size = size;
-  copyUpdateNotes(notes, out.notes, sizeof(out.notes));
+  snprintf(out.notes, sizeof(out.notes), "%s", notes ? notes : "");
   return OfferError::None;
 }
 
@@ -229,7 +233,7 @@ inline uint8_t updatePercent(uint32_t done, uint32_t total) {
 enum class UpdateError : uint8_t {
   None, NoWifi, NoServer, Unreachable, ServerError, BadResponse, TooLarge, NoUpdate,
   FileMissing, HttpError, SizeMismatch, Interrupted, Timeout, HashMismatch,
-  BeginFailed, WriteFailed, EndFailed, Busy
+  BeginFailed, WriteFailed, EndFailed, Busy, VerificationFailed
 };
 
 inline const char* updateErrorText(UpdateError e) {
@@ -252,6 +256,7 @@ inline const char* updateErrorText(UpdateError e) {
     case UpdateError::WriteFailed: return "Could not write the update";
     case UpdateError::EndFailed: return "Could not finish the update";
     case UpdateError::Busy: return "Another update task is running";
+    case UpdateError::VerificationFailed: return "Update verification failed";
   }
   return "Update failed";
 }
@@ -300,7 +305,11 @@ inline void formatUpdateStatus(char* out, size_t size, UpdateState s, const char
     case UpdateState::UpToDate: snprintf(out, size, "Up to date"); return;
     case UpdateState::Available: snprintf(out, size, "Update available: %s", offered); return;
     case UpdateState::Unavailable: snprintf(out, size, "Updates unavailable"); return;
-    case UpdateState::CheckFailed: snprintf(out, size, "Check failed: %s", updateErrorText(e)); return;
+    case UpdateState::CheckFailed:
+      // An unsigned or untrusted release: never "available", and no crypto detail.
+      if (e == UpdateError::VerificationFailed) snprintf(out, size, "%s", updateErrorText(e));
+      else snprintf(out, size, "Check failed: %s", updateErrorText(e));
+      return;
     case UpdateState::Downloading:
     case UpdateState::Installing: snprintf(out, size, "Installing %s...", offered); return;
     case UpdateState::Failed: snprintf(out, size, "Install failed: %s", updateErrorText(e)); return;

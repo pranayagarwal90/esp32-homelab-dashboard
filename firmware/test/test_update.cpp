@@ -101,15 +101,30 @@ static void testOfferValidation() {
   assert(validateUpdateOffer("1.0.0", "1.1.0", 1, SHA, url, nullptr, SLOT, offer) == OfferError::None);
   assert(offer.notes[0] == '\0');
 
-  // Notes: bounded and printable.
-  std::string longNotes(400, 'x');
-  longNotes[3] = '\n';
-  assert(validateUpdateOffer("1.0.0", "1.1.0", 1, SHA, url, longNotes.c_str(), SLOT, offer) == OfferError::None);
-  assert(strlen(offer.notes) == UPDATE_NOTES_MAX - 1 && offer.notes[3] == ' ');
+  // Notes are signed: taken exactly (printable, at most 200) or refused,
+  // never trimmed or rewritten.
+  std::string notes(200, 'x');
+  assert(validateUpdateOffer("1.0.0", "1.1.0", 1, SHA, url, notes.c_str(), SLOT, offer) == OfferError::None);
+  assert(strcmp(offer.notes, notes.c_str()) == 0);
+  notes += "x";
+  assert(validateUpdateOffer("1.0.0", "1.1.0", 1, SHA, url, notes.c_str(), SLOT, offer) == OfferError::Notes);
+  assert(validateUpdateOffer("1.0.0", "1.1.0", 1, SHA, url, "line\nbreak", SLOT, offer) == OfferError::Notes);
 }
 
+// Signature checks are covered by test_manifest_signature.cpp; here every
+// signature "verifies" so the rest of the response handling is visible.
+static const uint8_t TEST_KEY[65] = {0x04};
+static const TrustedUpdateKey TEST_KEYS[] = {{"homedeck-test-a", TEST_KEY}};
+static int acceptAll(const uint8_t*, const uint8_t*, size_t, const uint8_t*) {
+  return 1;
+}
+static const char* SIGNED_FIELDS =
+  "\"manifest_version\":2,\"product\":\"homedeck-mini\",\"filename\":\"homedeck-mini-1.1.0.bin\","
+  "\"key_id\":\"homedeck-test-a\",\"signature\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==\",";
+
 static UpdateState parse(const char* body, UpdateOffer& offer, UpdateError& error, const char* current = "1.0.0") {
-  return parseUpdateResponse(body, strlen(body), current, SLOT, offer, error);
+  SignatureCheck check;
+  return parseUpdateResponse(body, strlen(body), current, SLOT, TEST_KEYS, 1, acceptAll, offer, error, check);
 }
 
 static void testResponses() {
@@ -117,10 +132,17 @@ static void testResponses() {
   UpdateError error;
   assert(parse("{\"available\":false}", offer, error) == UpdateState::UpToDate && error == UpdateError::None);
 
-  std::string ok = std::string("{\"available\":true,\"version\":\"1.1.0\",\"size\":1047421,\"sha256\":\"") + SHA +
+  std::string ok = std::string("{\"available\":true,") + SIGNED_FIELDS + "\"version\":\"1.1.0\",\"size\":1047421,\"sha256\":\"" + SHA +
                    "\",\"notes\":\"Improved Wi-Fi setup and stability.\",\"url\":\"/firmware/homedeck-mini-1.1.0.bin\"}";
   assert(parse(ok.c_str(), offer, error) == UpdateState::Available && error == UpdateError::None);
   assert(strcmp(offer.version, "1.1.0") == 0 && strcmp(offer.notes, "Improved Wi-Fi setup and stability.") == 0);
+  assert(strcmp(offer.keyId, "homedeck-test-a") == 0);
+
+  // An older backend's unsigned answer is never an update.
+  std::string unsignedBody = ok;
+  unsignedBody.erase(unsignedBody.find(SIGNED_FIELDS), strlen(SIGNED_FIELDS));
+  assert(parse(unsignedBody.c_str(), offer, error) == UpdateState::CheckFailed);
+  assert(error == UpdateError::VerificationFailed && offer.version[0] == '\0');
 
   // A server offering the same or an older version is never believed.
   assert(parse(ok.c_str(), offer, error, "1.1.0") == UpdateState::UpToDate && offer.version[0] == '\0');

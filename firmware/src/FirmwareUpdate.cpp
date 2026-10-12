@@ -14,7 +14,9 @@
 #include "ProductIdentity.h"
 #include "SettingsStore.h"
 #include "SetupScreen.h"
+#include "TrustedUpdateKeys.h"
 #include "UpdateResponse.h"
+#include "UpdateVerifier.h"
 #include "WifiProvisioning.h"
 
 static const char* UPDATE_NAMESPACE = "update";
@@ -24,7 +26,7 @@ static constexpr uint32_t CHECK_TIMEOUT_MS = 8000;
 static constexpr uint32_t DOWNLOAD_CONNECT_MS = 10000;
 static constexpr uint32_t DOWNLOAD_STALL_MS = 15000;   // No bytes for this long: give up.
 static constexpr uint32_t DOWNLOAD_TOTAL_MS = 300000;  // Whole image (about 1 MB on a LAN: seconds).
-static constexpr uint32_t UPDATE_STACK_BYTES = 8192;
+static constexpr uint32_t UPDATE_STACK_BYTES = 10240; // Room for ECDSA verification (mbedTLS).
 static constexpr size_t CHUNK_BYTES = 1024;
 
 enum class Job : uint8_t { Check, Install };
@@ -132,17 +134,26 @@ static void runCheck() {
                   readBody(client, body, length, CHECK_TIMEOUT_MS);
   http.end();
   UpdateOffer offer;
-  state = complete ? parseUpdateResponse(body, length, firmwareVersion(), otaSlotSize(), offer, error)
+  SignatureCheck check = SignatureCheck::Unsigned;
+  // Verifies the manifest signature (trusted keys only) before anything can
+  // become Available; a failure publishes no offer and drops any older one.
+  state = complete ? parseUpdateResponse(body, length, firmwareVersion(), otaSlotSize(), TRUSTED_UPDATE_KEYS,
+                                         TRUSTED_UPDATE_KEY_SLOTS, deviceEcdsaP256Verify, offer, error, check)
                    : UpdateState::CheckFailed;
   if (!complete) error = UpdateError::BadResponse;
   if (state == UpdateState::Available) {
-    Serial.printf("[UPDATE] Update available: %s (%u bytes; running %s)\n", offer.version,
-                  unsigned(offer.size), firmwareVersion());
+    Serial.printf("[UPDATE] Update available: %s (%u bytes; running %s; signed by %s)\n", offer.version,
+                  unsigned(offer.size), firmwareVersion(), offer.keyId);
     publishOffer(state, error, &offer);
   } else {
-    Serial.printf("[UPDATE] Check: %s\n", state == UpdateState::UpToDate ? "up to date" : updateErrorText(error));
+    if (error == UpdateError::VerificationFailed) {
+      Serial.printf("[UPDATE] Update rejected: %s\n", signatureCheckText(check));
+    } else {
+      Serial.printf("[UPDATE] Check: %s\n", state == UpdateState::UpToDate ? "up to date" : updateErrorText(error));
+    }
     publishOffer(state, error, nullptr);
   }
+  Serial.printf("[UPDATE] Check task stack headroom: %u bytes\n", unsigned(uxTaskGetStackHighWaterMark(nullptr)));
 }
 
 // --- Install (update task) ------------------------------------------------------------

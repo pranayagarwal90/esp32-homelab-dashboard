@@ -1,28 +1,38 @@
 """Firmware releases for HomeDeck Mini pull updates (disabled by default).
 
-The backend publishes at most one release, described by a small JSON
-manifest next to the firmware file:
+The backend publishes at most one release, described by a small signed JSON
+manifest (version 2) next to the firmware file:
 
     {
+      "manifest_version": 2,
       "product": "homedeck-mini",
       "version": "1.1.0",
       "filename": "homedeck-mini-1.1.0.bin",
       "size": 1047421,
-      "sha256": "<64 hex characters>",
-      "notes": "Improved Wi-Fi setup and stability."
+      "sha256": "<64 lower-case hex characters>",
+      "notes": "Improved Wi-Fi setup and stability.",
+      "key_id": "homedeck-release-2026",
+      "signature": "<base64 of the 64-byte raw ECDSA P-256 r||s>"
     }
+
+The signature is made offline with the project's release key
+(tools/prepare-firmware-release.py) over canonical_payload(), never over the
+JSON text. The backend is not a trust authority: it checks only the
+signature's format, never verifies or creates signatures, and has no key.
+HomeDeck Mini verifies it against the public keys built into its firmware
+before offering the update.
 
 The manifest is validated on every request (it is tiny, and the file on disk
 is re-hashed only when its size or modification time changes). An invalid
 manifest, or a firmware file that does not match it, is never offered or
 served.
 
-Trust model: the device trusts the backend it was configured to use. The
-SHA-256 protects the download against corruption and truncation; it does not
-prove who published the firmware, so anyone who controls this backend (or
-its release directory) controls what a device installs. Signed releases are
-a later hardening step.
+Trust model: the signature proves the release (including its SHA-256) was
+published by the holder of a trusted release key; the SHA-256 then proves the
+downloaded image is that release. A compromised backend can withhold
+updates, but not make a device install firmware the key holder never signed.
 """
+import base64
 from dataclasses import dataclass
 from pathlib import Path
 import hashlib
@@ -38,12 +48,16 @@ MAX_FIRMWARE_SIZE = 4 * 1024 * 1024
 MAX_NOTES = 200          # The device shows at most this many characters.
 MAX_MANIFEST_BYTES = 4096
 MAX_VERSION_PART = 65535
+MANIFEST_VERSION = 2
+SIGNATURE_BYTES = 64     # Raw r||s, each 32 bytes big-endian.
 
 _VERSION = re.compile(r"(0|[1-9][0-9]{0,4})\.(0|[1-9][0-9]{0,4})\.(0|[1-9][0-9]{0,4})")
 # A plain file name: no directories, no leading dot, .bin only.
 _FILENAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,59}\.bin")
 _SHA256 = re.compile(r"[0-9a-f]{64}")
-_MANIFEST_KEYS = {"product", "version", "filename", "size", "sha256", "notes"}
+_KEY_ID = re.compile(r"[a-z0-9][a-z0-9-]{0,31}")
+_MANIFEST_KEYS = {"manifest_version", "product", "version", "filename", "size", "sha256", "notes",
+                  "key_id", "signature"}
 
 
 class ManifestError(Exception):
@@ -51,14 +65,22 @@ class ManifestError(Exception):
 
 
 @dataclass(frozen=True)
-class Release:
+class Manifest:
+    """A structurally valid v2 manifest (signature not verified here)."""
+    manifest_version: int
     product: str
     version: str
     filename: str
     size: int
     sha256: str
     notes: str
-    path: Path   # Never sent to clients.
+    key_id: str
+    signature: str  # Base64 of 64 bytes, canonical encoding.
+
+
+@dataclass(frozen=True)
+class Release(Manifest):
+    path: Path = None  # Never sent to clients.
 
     @property
     def url(self):
@@ -81,14 +103,49 @@ def valid_filename(name):
     return isinstance(name, str) and bool(_FILENAME.fullmatch(name)) and ".." not in name
 
 
+def valid_key_id(key_id):
+    return isinstance(key_id, str) and bool(_KEY_ID.fullmatch(key_id))
+
+
+def decode_signature(text):
+    """The 64 raw signature bytes, or None unless text is their canonical
+    padded base64 (88 characters)."""
+    if not isinstance(text, str) or len(text) != 88:
+        return None
+    try:
+        raw = base64.b64decode(text, validate=True)
+    except ValueError:
+        return None
+    return raw if len(raw) == SIGNATURE_BYTES and base64.b64encode(raw).decode() == text else None
+
+
+def canonical_payload(manifest_version, product, version, filename, size, sha256, notes, key_id):
+    """The exact bytes a release signature covers (ECDSA P-256 over their
+    SHA-256). Fixed field order; each field is name=<decimal length>:<value>
+    and a line feed, so no value can run into the next; values are ASCII
+    (validated). Mirrored by firmware/include/ManifestSignature.h; vectors in
+    firmware/test/vectors/manifest_signature_v2.json."""
+    fields = (("manifest_version", str(manifest_version)), ("product", product), ("version", version),
+              ("filename", filename), ("size", str(size)), ("sha256", sha256.lower()), ("notes", notes),
+              ("key_id", key_id))
+    out = "HOMEDECK-MANIFEST-SIGNATURE\n"
+    for name, value in fields:
+        out += f"{name}={len(value)}:{value}\n"
+    return out.encode("ascii")
+
+
 def validate_manifest(data):
-    """The manifest fields, checked; raises ManifestError. Unknown keys are
-    rejected so a typo cannot silently drop a field."""
+    """A Manifest from parsed JSON; raises ManifestError. Unknown keys are
+    rejected so a typo cannot silently drop a field. Unsigned (version 1)
+    manifests are not accepted."""
     if not isinstance(data, dict):
         raise ManifestError("manifest must be a JSON object")
     unknown = set(data) - _MANIFEST_KEYS
     if unknown:
         raise ManifestError(f"unknown manifest keys: {', '.join(sorted(unknown))}")
+    manifest_version = data.get("manifest_version")
+    if type(manifest_version) is not int or manifest_version != MANIFEST_VERSION:
+        raise ManifestError("manifest_version must be 2 (signed); unsigned manifests are not served")
     product = data.get("product")
     if product != PRODUCT:
         raise ManifestError(f"product must be {PRODUCT!r}")
@@ -109,7 +166,14 @@ def validate_manifest(data):
         raise ManifestError(f"notes must be text of at most {MAX_NOTES} characters")
     if any(not " " <= ch <= "~" for ch in notes):
         raise ManifestError("notes must be printable ASCII (the display has no other glyphs)")
-    return product, version, filename, size, sha256.lower(), notes.strip()
+    key_id = data.get("key_id")
+    if not valid_key_id(key_id):
+        raise ManifestError("key_id must be 1-32 characters: a-z, 0-9 and '-'")
+    signature = data.get("signature")
+    if decode_signature(signature) is None:
+        raise ManifestError("signature must be base64 of a 64-byte ECDSA P-256 r||s signature")
+    # Notes are served exactly as signed (never trimmed or changed).
+    return Manifest(manifest_version, product, version, filename, size, sha256.lower(), notes, key_id, signature)
 
 
 def _file_sha256(path, chunk=65536):
@@ -144,7 +208,8 @@ class ReleaseStore:
             data = json.loads(raw.decode("utf-8"))
         except (UnicodeDecodeError, ValueError):
             raise ManifestError("manifest is not valid JSON") from None
-        product, version, filename, size, sha256, notes = validate_manifest(data)
+        manifest = validate_manifest(data)
+        filename, size, sha256 = manifest.filename, manifest.size, manifest.sha256
 
         root = self.release_dir.resolve()
         path = (root / filename).resolve()
@@ -163,7 +228,7 @@ class ReleaseStore:
             self._hash_cache = {key: _file_sha256(path)}
         if self._hash_cache[key] != sha256:
             raise ManifestError("firmware file does not match the manifest sha256")
-        return Release(product, version, filename, size, sha256, notes, path)
+        return Release(**manifest.__dict__, path=path)
 
     def check(self, product, current):
         """(HTTP status, JSON payload) for GET /api/firmware/update."""
@@ -182,12 +247,19 @@ class ReleaseStore:
         # Never offer the same or an older version.
         if parse_version(release.version) <= current_version:
             return 200, {"available": False}
+        # Every signed field, unchanged, so the device can rebuild the signed
+        # payload; "url" is the download path for these fields' filename.
         return 200, {
             "available": True,
+            "manifest_version": release.manifest_version,
+            "product": release.product,
             "version": release.version,
+            "filename": release.filename,
             "size": release.size,
             "sha256": release.sha256,
             "notes": release.notes,
+            "key_id": release.key_id,
+            "signature": release.signature,
             "url": release.url,
         }
 
