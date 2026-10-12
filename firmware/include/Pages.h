@@ -89,3 +89,27 @@ inline Page appBackTarget(Page page, Page origin) {
       return PAGE_MORE;
   }
 }
+
+// --- Simple paging (SERVICES, CLOCKS) ---------------------------------------------------
+// Pages of perPage items (always at least one page) and a bottom bar of
+// PREV | BACK | NEXT thirds, like the ALERTS page.
+
+inline int pageCountFor(int count, int perPage) {
+  return count <= perPage ? 1 : (count + perPage - 1) / perPage;
+}
+
+inline int clampPageIndex(int page, int count, int perPage) {
+  int last = pageCountFor(count, perPage) - 1;
+  return page < 0 ? 0 : page > last ? last : page;
+}
+
+enum class PagerHit : uint8_t { None, Prev, Back, Next };
+
+// PREV/NEXT only exist when there is more than one page; otherwise the whole
+// bar is BACK.
+inline PagerHit pagerBarAt(int x, int y, int pages) {
+  if (y < NAV_Y) return PagerHit::None;
+  if (pages > 1 && x < NAV_SPLIT_1) return PagerHit::Prev;
+  if (pages > 1 && x >= NAV_SPLIT_2) return PagerHit::Next;
+  return PagerHit::Back;
+}

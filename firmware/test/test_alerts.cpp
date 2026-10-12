@@ -3,7 +3,30 @@
 #include <stdio.h>
 #include <string.h>
 
-static const uint8_t ALL_SERVICES = (1u << ALERT_SERVICE_COUNT) - 1;
+// Five services, as the backend lists them; bit i of a mask is service i.
+enum TestService { ALERT_JELLYFIN, ALERT_NAVIDROME, ALERT_METUBE, ALERT_OLLAMA, ALERT_CLOUDFLARE, TEST_SERVICES };
+static const char* const IDS[TEST_SERVICES] = {"jellyfin", "navidrome", "metube", "ollama", "cloudflare"};
+static const char* const LABELS[TEST_SERVICES] = {"Jellyfin", "Navidrome", "MeTube", "Ollama", "Cloudflare"};
+static const uint8_t ALL_SERVICES = (1u << TEST_SERVICES) - 1;
+
+// Each input gets its own list (inputs hold a pointer to it).
+static ServiceState pool[64];
+static int poolNext = 0;
+
+// listed: services in the list; online: listed ones that are up (others down).
+static void setServices(AlertInput& input, uint8_t listed, uint8_t online) {
+  ServiceState& state = pool[poolNext++ % 64];
+  state = ServiceState();
+  state.received = true;
+  for (int i = 0; i < TEST_SERVICES; i++) {
+    if (listed & (1u << i)) addService(state, IDS[i], LABELS[i], online & (1u << i) ? SERVICE_UP : SERVICE_DOWN);
+  }
+  input.services = &state;
+}
+
+static int slotOf(const AlertTable& table, int service) {
+  return alertServiceSlot(table, IDS[service]);
+}
 
 // A healthy report: every service reported online, RAM and three disks low.
 static AlertInput healthy() {
@@ -16,13 +39,17 @@ static AlertInput healthy() {
   input.diskPercent[0] = 45;
   input.diskPercent[1] = 49;
   input.diskPercent[2] = 5;
-  input.servicesReported = ALL_SERVICES;
-  input.servicesOnline = ALL_SERVICES;
+  setServices(input, ALL_SERVICES, ALL_SERVICES);
   return input;
 }
 
 static AlertSeverity severityOf(const AlertTable& table, int slot) {
   return table.slots[slot].severity;
+}
+
+static AlertSeverity serviceSeverity(const AlertTable& table, int service) {
+  int slot = slotOf(table, service);
+  return slot < 0 ? AlertSeverity::None : table.slots[slot].severity;
 }
 
 static int diskSlot(const AlertTable& table, const char* name) {
@@ -38,10 +65,12 @@ static void testServices() {
   assert(alertsApplyStatus(table, input, 1000)); // First status changes "NO DATA".
   assert(alertsActiveCount(table) == 0);
   assert(!alertsApplyStatus(table, input, 2000)); // Unchanged snapshot.
+  // Listed services hold slots in list order.
+  for (int i = 0; i < TEST_SERVICES; i++) assert(slotOf(table, i) == i);
 
-  input.servicesOnline &= ~(1u << ALERT_METUBE);
+  setServices(input, ALL_SERVICES, ALL_SERVICES & ~(1u << ALERT_METUBE));
   assert(alertsApplyStatus(table, input, 3000));
-  assert(severityOf(table, ALERT_METUBE) == AlertSeverity::Warning);
+  assert(serviceSeverity(table, ALERT_METUBE) == AlertSeverity::Warning);
   assert(table.slots[ALERT_METUBE].sinceMs == 3000);
   assert(alertsActiveCount(table) == 1);
 
@@ -49,47 +78,109 @@ static void testServices() {
   assert(!alertsApplyStatus(table, input, 4000));
   assert(alertsActiveCount(table) == 1 && table.slots[ALERT_METUBE].sinceMs == 3000);
 
-  input.servicesOnline = ALL_SERVICES;
+  setServices(input, ALL_SERVICES, ALL_SERVICES);
   assert(alertsApplyStatus(table, input, 5000));
   assert(alertsActiveCount(table) == 0);
 
   // Offline again later: a fresh activation.
-  input.servicesOnline &= ~(1u << ALERT_METUBE);
+  setServices(input, ALL_SERVICES, ALL_SERVICES & ~(1u << ALERT_METUBE));
   assert(alertsApplyStatus(table, input, 9000));
   assert(table.slots[ALERT_METUBE].sinceMs == 9000);
 
-  // Every monitored service is a WARNING, Cloudflare included.
-  input.servicesOnline = 0;
+  // Every listed service is a WARNING when down.
+  setServices(input, ALL_SERVICES, 0);
   alertsApplyStatus(table, input, 10000);
-  for (int i = 0; i < ALERT_SERVICE_COUNT; i++) assert(severityOf(table, i) == AlertSeverity::Warning);
+  for (int i = 0; i < TEST_SERVICES; i++) assert(serviceSeverity(table, i) == AlertSeverity::Warning);
   assert(alertsCount(table, AlertSeverity::Critical) == 0);
 }
 
-static void testMissingServiceKeys() {
+// Phase 6 sticky-alert fix: the list is the whole truth.
+static void testServiceListChanges() {
   AlertTable table;
   AlertInput input = healthy();
-  // Key missing: unknown, never an outage, even though "online" is false.
-  input.servicesReported &= ~(1u << ALERT_OLLAMA);
-  input.servicesOnline &= ~(1u << ALERT_OLLAMA);
+  // Not listed (not configured): never an outage.
+  setServices(input, ALL_SERVICES & ~(1u << ALERT_OLLAMA), ALL_SERVICES);
   alertsApplyStatus(table, input, 1000);
-  assert(severityOf(table, ALERT_OLLAMA) == AlertSeverity::None);
+  assert(slotOf(table, ALERT_OLLAMA) < 0 && alertsActiveCount(table) == 0);
 
-  // Reported offline, then the key disappears: previous state is kept.
-  input.servicesReported = ALL_SERVICES;
+  // Listed and down, then removed from the backend's SERVICES: cleared, and
+  // its slot released.
+  setServices(input, ALL_SERVICES, ALL_SERVICES & ~(1u << ALERT_OLLAMA));
   alertsApplyStatus(table, input, 2000);
-  assert(severityOf(table, ALERT_OLLAMA) == AlertSeverity::Warning);
-  input.servicesReported &= ~(1u << ALERT_OLLAMA);
-  input.servicesOnline |= 1u << ALERT_OLLAMA;
-  assert(!alertsApplyStatus(table, input, 3000));
-  assert(severityOf(table, ALERT_OLLAMA) == AlertSeverity::Warning);
+  assert(serviceSeverity(table, ALERT_OLLAMA) == AlertSeverity::Warning);
+  setServices(input, ALL_SERVICES & ~(1u << ALERT_OLLAMA), ALL_SERVICES);
+  assert(alertsApplyStatus(table, input, 3000));
+  assert(slotOf(table, ALERT_OLLAMA) < 0 && alertsActiveCount(table) == 0);
+  char title[SERVICE_LABEL_SIZE];
+  for (int slot = 0; slot < ALERT_SERVICE_SLOTS; slot++) {
+    alertTitle(table, slot, title, sizeof(title));
+    assert(strcmp(title, "Ollama") != 0);
+  }
 
-  // No services reported at all (e.g. empty object).
-  AlertTable fresh;
-  AlertInput none = healthy();
-  none.servicesReported = 0;
-  none.servicesOnline = 0;
-  alertsApplyStatus(fresh, none, 1000);
-  assert(alertsActiveCount(fresh) == 0);
+  // Several down, then the list shrinks to one: only that one may remain.
+  setServices(input, ALL_SERVICES, 0);
+  alertsApplyStatus(table, input, 4000);
+  assert(alertsActiveCount(table) == 5);
+  setServices(input, 1u << ALERT_CLOUDFLARE, 0);
+  assert(alertsApplyStatus(table, input, 5000));
+  assert(alertsActiveCount(table) == 1 && serviceSeverity(table, ALERT_CLOUDFLARE) == AlertSeverity::Warning);
+  for (int i = 0; i < ALERT_CLOUDFLARE; i++) assert(slotOf(table, i) < 0);
+  // Its activation time is kept across the list change.
+  assert(table.slots[slotOf(table, ALERT_CLOUDFLARE)].sinceMs == 4000);
+
+  // No services configured: no service alerts at all.
+  setServices(input, 0, 0);
+  assert(alertsApplyStatus(table, input, 6000));
+  assert(alertsActiveCount(table) == 0);
+
+  // Unknown status: listed, grey, never an alert (and it clears one).
+  ServiceState unknown;
+  addService(unknown, "jellyfin", "Jellyfin", SERVICE_DOWN);
+  input.services = &unknown;
+  alertsApplyStatus(table, input, 7000);
+  assert(alertsActiveCount(table) == 1);
+  unknown.items[0].status = SERVICE_UNKNOWN;
+  assert(alertsApplyStatus(table, input, 8000));
+  assert(alertsActiveCount(table) == 0 && slotOf(table, ALERT_JELLYFIN) >= 0);
+
+  // nullptr: services not part of this input; their alerts are kept.
+  unknown.items[0].status = SERVICE_DOWN;
+  alertsApplyStatus(table, input, 9000);
+  input.services = nullptr;
+  assert(!alertsApplyStatus(table, input, 10000));
+  assert(alertsActiveCount(table) == 1);
+}
+
+// Alert titles come from the backend's label (and follow a renamed one).
+static void testServiceLabels() {
+  AlertTable table;
+  AlertInput input = healthy();
+  ServiceState custom;
+  addService(custom, "home_assistant", "Home Assistant", SERVICE_DOWN);
+  input.services = &custom;
+  alertsApplyStatus(table, input, 1000);
+  char text[32];
+  alertTitle(table, 0, text, sizeof(text));
+  assert(strcmp(text, "Home Assistant") == 0);
+  alertValueText(table, 0, text, sizeof(text));
+  assert(strcmp(text, "OFFLINE") == 0);
+  copyServiceLabel(custom.items[0].label, "Home Assistant 2", "home_assistant");
+  assert(alertsApplyStatus(table, input, 2000)); // A visible title change.
+  alertTitle(table, 0, text, sizeof(text));
+  assert(strcmp(text, "Home Assistant 2") == 0 && table.slots[0].sinceMs == 1000);
+
+  // The cap: a full list of MAX_SERVICES down services fits the table.
+  ServiceState full;
+  char id[8];
+  for (int i = 0; i < MAX_SERVICES + 4; i++) {
+    snprintf(id, sizeof(id), "svc%d", i);
+    addService(full, id, id, SERVICE_DOWN);
+  }
+  assert(full.count == MAX_SERVICES);
+  AlertTable many;
+  input.services = &full;
+  alertsApplyStatus(many, input, 1000);
+  assert(alertsActiveCount(many) == MAX_SERVICES && ALERT_SERVICE_SLOTS == MAX_SERVICES);
 }
 
 static void testThresholds() {
@@ -229,7 +320,7 @@ static void testHostUnavailable() {
   down.hostAvailable = false;
   down.memPercent = 0;
   down.diskCount = 0;
-  down.servicesOnline &= ~(1u << ALERT_JELLYFIN);
+  setServices(down, ALL_SERVICES, ALL_SERVICES & ~(1u << ALERT_JELLYFIN));
   assert(alertsApplyStatus(table, down, 2000));
   assert(severityOf(table, ALERT_SLOT_RAM) == AlertSeverity::Warning);
   assert(table.slots[ALERT_SLOT_RAM].value == 90);
@@ -275,7 +366,7 @@ static void testStale() {
   // Other alerts are preserved while failing.
   AlertTable kept;
   AlertInput input = healthy();
-  input.servicesOnline &= ~(1u << ALERT_CLOUDFLARE);
+  setServices(input, ALL_SERVICES, ALL_SERVICES & ~(1u << ALERT_CLOUDFLARE));
   alertsApplyStatus(kept, input, 1000);
   for (uint32_t t = 11000; t <= 81000; t += 10000) alertsFetchFailed(kept, t);
   assert(severityOf(kept, ALERT_CLOUDFLARE) == AlertSeverity::Warning);
@@ -341,7 +432,7 @@ static void testGeneral() {
   assert(strcmp(text, "ALL GOOD") == 0);
 
   AlertInput input = healthy();
-  input.servicesOnline &= ~((1u << ALERT_JELLYFIN) | (1u << ALERT_CLOUDFLARE));
+  setServices(input, ALL_SERVICES, ALL_SERVICES & ~((1u << ALERT_JELLYFIN) | (1u << ALERT_CLOUDFLARE)));
   input.memPercent = 97;
   input.diskPercent[1] = 88;
   alertsApplyStatus(table, input, 2000);
@@ -387,7 +478,13 @@ static void testGeneral() {
   // Every slot active at once still fits the fixed table.
   AlertTable full;
   AlertInput worst = healthy();
-  worst.servicesOnline = 0;
+  ServiceState allDown;
+  char worstId[8];
+  for (int i = 0; i < MAX_SERVICES; i++) {
+    snprintf(worstId, sizeof(worstId), "s%d", i);
+    addService(allDown, worstId, worstId, SERVICE_DOWN);
+  }
+  worst.services = &allDown;
   worst.memPercent = 99;
   worst.diskCount = 4;
   worst.diskNames[3] = "F:";
@@ -415,7 +512,7 @@ static void testPaging() {
   assert(alertPageCount(0) == 1);
   assert(alertPageCount(1) == 1 && alertPageCount(3) == 1);
   assert(alertPageCount(4) == 2 && alertPageCount(6) == 2);
-  assert(alertPageCount(7) == 3 && alertPageCount(ALERT_SLOT_COUNT) == 4);
+  assert(alertPageCount(7) == 3 && ALERT_SLOT_COUNT == 22 && alertPageCount(ALERT_SLOT_COUNT) == 8);
   assert(clampAlertPage(-1, 5) == 0);
   assert(clampAlertPage(1, 5) == 1);
   assert(clampAlertPage(3, 5) == 1); // Alerts cleared while on a later page.
@@ -439,7 +536,8 @@ static void testPaging() {
 
 int main() {
   testServices();
-  testMissingServiceKeys();
+  testServiceListChanges();
+  testServiceLabels();
   testThresholds();
   testRam();
   testDisks();
@@ -448,5 +546,5 @@ int main() {
   testStalePause();
   testGeneral();
   testPaging();
-  puts("Alert tests passed: services, missing keys, thresholds, ram, disks, host unavailable, stale, stale pause, general, paging");
+  puts("Alert tests passed: services, list changes, labels, thresholds, ram, disks, host unavailable, stale, stale pause, general, paging");
 }

@@ -61,8 +61,11 @@ static AlertTable tableWith() {
   input.diskNames[1] = names[1];
   input.diskPercent[0] = 40;
   input.diskPercent[1] = 88;
-  input.servicesReported = 0x1F;
-  input.servicesOnline = 0x1F & ~(1u << ALERT_METUBE);
+  static ServiceState services;
+  services = ServiceState();
+  const char* ids[] = {"jellyfin", "navidrome", "metube", "ollama", "cloudflare"};
+  for (const char* id : ids) addService(services, id, id, strcmp(id, "metube") == 0 ? SERVICE_DOWN : SERVICE_UP);
+  input.services = &services;
   alertsApplyStatus(table, input, 1000);
   return table;
 }
@@ -75,8 +78,9 @@ static void testRequestBody() {
 
   AlertTable healthy;
   AlertInput ok;
-  ok.servicesReported = 0x1F;
-  ok.servicesOnline = 0x1F;
+  ServiceState up;
+  addService(up, "jellyfin", "Jellyfin", SERVICE_UP);
+  ok.services = &up;
   alertsApplyStatus(healthy, ok, 0);
   aiRequestBody(AiMode::Action, true, healthy, body, sizeof(body));
   assert(strcmp(body, "{\"mode\":\"action\",\"refresh\":true,\"alerts\":[]}") == 0);
@@ -90,11 +94,24 @@ static void testRequestBody() {
                       "{\"id\":\"disk\",\"level\":\"warning\",\"subject\":\"D:\"}]}") == 0);
   assert(!strstr(body, "96") && !strstr(body, "88"));
 
-  // Every slot active still fits.
+  // Every slot active (more than the backend's 12) still fits: capped at
+  // AI_MAX_ALERTS, most severe first, longest ids.
   AlertTable full = tableWith();
   for (int i = 0; i < ALERT_SLOT_COUNT; i++) full.slots[i].severity = AlertSeverity::Critical;
+  for (int i = 0; i < ALERT_SERVICE_SLOTS; i++) {
+    snprintf(full.services[i].id, SERVICE_ID_SIZE, "%s%02d", "service_with_long_idx", i);
+    assert(strlen(full.services[i].id) == SERVICE_ID_SIZE - 1);
+  }
   for (int i = 0; i < ALERT_MAX_DISKS; i++) snprintf(full.slots[ALERT_SLOT_DISK0 + i].subject, ALERT_SUBJECT_MAX, "%c:", 'C' + i);
-  assert(aiRequestBody(AiMode::Summary, true, full, body, sizeof(body)) > 0);
+  assert(aiRequestBody(AiMode::Attention, true, full, body, sizeof(body)) > 0);
+  int codes = 0;
+  for (const char* p = body; (p = strstr(p, "\"id\"")); p++) codes++;
+  assert(codes == AI_MAX_ALERTS);
+  // A free service slot (no id) never becomes a code.
+  AlertTable blank = tableWith();
+  blank.slots[ALERT_SERVICE_SLOTS - 1].severity = AlertSeverity::Warning;
+  aiRequestBody(AiMode::Alerts, false, blank, body, sizeof(body));
+  assert(!strstr(body, "\"id\":\"\""));
   // Too small a buffer fails cleanly; bad disk names are skipped.
   char tiny[24];
   memset(tiny, 'x', sizeof(tiny));

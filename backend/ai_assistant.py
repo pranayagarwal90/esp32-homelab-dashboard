@@ -18,7 +18,7 @@ from datetime import datetime
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
-from services import SERVICE_DEFINITIONS
+from services import SERVICES_BY_ID
 
 # Two local Ollama engines (nothing leaves the network), configured in
 # config.py (AiConfig):
@@ -59,11 +59,10 @@ MODES = {
     "summary": "Give a concise HomeServer health summary.",
 }
 
-# The dashboard's alertable services (firmware AlertLogic.h) and the services
-# shown on its SERVICES page (firmware ServicesLogic.h), in display order.
-ALERT_SERVICES = ("jellyfin", "navidrome", "metube", "ollama", "cloudflare")
-SERVICE_LABELS = {service.id: service.label for service in SERVICE_DEFINITIONS if service.displayed}
-ALERT_IDS = set(ALERT_SERVICES) | {"ram", "disk", "stale"}
+# Alert codes: the metric alerts, or a service id from the registry (the
+# firmware alerts on every service in /api/status services_list).
+METRIC_ALERT_IDS = {"ram", "disk", "stale"}
+ALERT_IDS = METRIC_ALERT_IDS | set(SERVICES_BY_ID)
 LEVELS = ("critical", "warning")
 MAX_ALERTS = 12
 
@@ -153,6 +152,18 @@ def _clean_name(value, limit=24):
     return re.sub(r"[^A-Za-z0-9 :._-]", "", str(value or ""))[:limit].strip()
 
 
+def service_items(status):
+    """[(id, label, status)] of the monitored services: services_list, or the
+    legacy services object (null = not monitored) from an older status."""
+    listed = status.get("services_list")
+    if isinstance(listed, list):
+        return [(item.get("id"), str(item.get("label") or item.get("id")), item.get("status"))
+                for item in listed if isinstance(item, dict) and item.get("id") in SERVICES_BY_ID]
+    legacy = status.get("services") or {}
+    return [(key, SERVICES_BY_ID[key].label, value) for key, value in legacy.items()
+            if key in SERVICES_BY_ID and isinstance(value, bool)]
+
+
 def build_facts(status, alerts):
     """Deterministic facts from the backend status and the dashboard alerts."""
     host_ok = bool(status.get("host_available"))
@@ -161,15 +172,16 @@ def build_facts(status, alerts):
         name = _clean_name(disk.get("name"), 4)
         if name:
             disks[name.upper()] = _percent(disk.get("percent"))
-    services = status.get("services") or {}
+    services = service_items(status)
+    labels = {key: label for key, label, _ in services}
     hostname = str(status.get("hostname") or "")
 
     problems = []
     if alerts is not None:
         for alert in alerts:
-            if alert["id"] in ALERT_SERVICES:
-                text = f"{SERVICE_LABELS[alert['id']]} is offline"
-                subject = SERVICE_LABELS[alert["id"]]
+            if alert["id"] in SERVICES_BY_ID:
+                subject = labels.get(alert["id"], SERVICES_BY_ID[alert["id"]].label)
+                text = f"{subject} is offline"
             elif alert["id"] == "ram":
                 ram = _percent((status.get("memory") or {}).get("percent")) if host_ok else None
                 text = f"RAM usage is {ram}%" if ram is not None else "RAM usage is high (current value unavailable)"
@@ -188,8 +200,8 @@ def build_facts(status, alerts):
 
     # Only monitored services: null or missing means not configured, which is
     # neither a problem nor worth mentioning.
-    online = [label for key, label in SERVICE_LABELS.items() if services.get(key) is True]
-    offline = [label for key, label in SERVICE_LABELS.items() if services.get(key) is False]
+    online = [label for _, label, state in services if state is True]
+    offline = [label for _, label, state in services if state is False]
     # The dashboard's alert wins if the backend's own check disagrees (race).
     alerted = {p["subject"] for p in problems}
     online = [name for name in online if name not in alerted]
@@ -353,8 +365,8 @@ def rules_action(facts):
     if not facts["problems"]:
         return "Check that the Windows metrics agent is running." if not facts["host_available"] else ""
     top = facts["problems"][0]
-    if top["id"] in ALERT_SERVICES:
-        return f"Check the {SERVICE_LABELS[top['id']]} container status and logs."
+    if top["id"] in SERVICES_BY_ID:
+        return f"Check the {top['subject']} service status and logs."
     if top["id"] == "ram":
         return "Review which processes are using the most memory."
     if top["id"] == "disk":

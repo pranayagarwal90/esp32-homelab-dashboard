@@ -94,20 +94,24 @@ python3 backend/server.py
 - `DASHBOARD_PHOTOS_DIR` may be absolute; a relative path is resolved from the
   project root (default `./photos-ready`), never from the working directory.
   The directory is created when missing.
-- `DASHBOARD_WORLD_CLOCKS` (`Label=Area/City,...`) adds clocks to
-  `/api/status`. The current firmware still shows only the `india`,
-  `singapore` and `london` keys; unconfigured ones are sent as `--:--`.
-  Fully configurable clocks need a later firmware/protocol change.
+- `DASHBOARD_WORLD_CLOCKS` (`Label=Area/City,...`, at most 8, labels up to
+  20 characters) is the device's world clocks, sent as `/api/status`
+  `world_clocks` (`[{label, timezone, time}]`, DST-aware) in config order;
+  the device shows three per page. The legacy `timezones` keys (`india`,
+  `singapore`, `london`, `--:--` when unconfigured) are still sent for
+  firmware 1.0.x.
 
 See `.env.example` for every setting.
 
 # Service health checks
 
-The Services tab displays Jellyfin, Navidrome, Ollama, Cloudfare, NextCloud,
-Immich, and Technical Blog in that order. The `/api/status` services object
-retains its original seven keys for older firmware and adds `nextcloud`,
-`immich`, and `technical_blog` (plus the older `bazarr` and `mcp`, which the
-firmware does not show).
+The device shows, alerts on and tells the AI assistant about exactly the
+services the backend lists: `/api/status` `services_list` is
+`[{id, label, status}]` for the services in `SERVICES`, in registry order
+(`backend/services.py` owns ids and labels; at most 16, eight per SERVICES
+page). The legacy `services` object (every id: `true`/`false`/`null`) is still
+sent for firmware 1.0.x, and the firmware falls back to it with an older
+backend. `api_version` is 2.
 
 ## Choosing services: `SERVICES`
 
@@ -120,17 +124,17 @@ SERVICES=jellyfin,ollama,immich
 Ids are case-insensitive and deduplicated; an unknown id (such as a typo)
 stops startup with a configuration error. Blank monitors nothing.
 
-| Service | `/api/status` value | SERVICES page | Alert |
+| Service | `/api/status` | SERVICES page | Alert |
 | --- | --- | --- | --- |
-| Not listed | `null` (never checked, no Docker lookup) | grey (unknown) | never |
+| Not listed | absent from `services_list`; legacy `null` | not shown | never |
 | Listed, healthy | `true` | green | none |
-| Listed, down or not found | `false` | red | warning (alertable services) |
+| Listed, down or not found | `false` | red | warning |
 
-Unlisted services are not checked, not considered offline and never generate
-alerts. Every key stays in the response so older firmware keeps working. The
-AI assistant does not mention unlisted services. If a service is unlisted
-while the display is showing an alert for it, the alert stays until the
-service is reported again or the display restarts.
+Unlisted services are not checked, not considered offline, not shown and
+never generate alerts. Every legacy key stays in the response so older
+firmware keeps working. The AI assistant does not mention unlisted services.
+Alerts are keyed by service id: removing a service from `SERVICES` clears its
+alert at the device's next status update.
 
 ## Health URLs
 

@@ -1,8 +1,11 @@
 """The services the dashboard knows: one registry for config, server and AI.
 
-The ids are the /api/status `services` keys the firmware reads; order is the
-order they appear in that object. Which ones are monitored is configuration
-(SERVICES in config.py); a service's health URL is SERVICE_<ID>_HEALTH_URL.
+Which ones are monitored is configuration (SERVICES in config.py); a
+service's health URL is SERVICE_<ID>_HEALTH_URL. /api/status reports the
+monitored ones in `services_list` as {id, label, status}, in registry order;
+the firmware renders, alerts on and labels whatever that list holds, so the
+registry (not the firmware) owns ids and labels. The legacy `services`
+object (every id: true/false/null) is still sent for older firmware.
 """
 from dataclasses import dataclass
 
@@ -14,8 +17,6 @@ class ServiceDefinition:
     # Without a health URL, the service is up when a running Docker container
     # name contains one of these. Empty: no Docker identity (URL only).
     docker_names: tuple = ()
-    # Shown on the firmware's SERVICES page (and so in AI context).
-    displayed: bool = True
 
     @property
     def env(self):
@@ -26,13 +27,19 @@ SERVICE_DEFINITIONS = (
     ServiceDefinition("jellyfin", "Jellyfin", ("jellyfin",)),
     ServiceDefinition("navidrome", "Navidrome", ("navidrome",)),
     ServiceDefinition("metube", "MeTube", ("metube",)),
-    ServiceDefinition("bazarr", "Bazarr", ("bazarr",), displayed=False),
+    ServiceDefinition("bazarr", "Bazarr", ("bazarr",)),
     ServiceDefinition("ollama", "Ollama", ("ollama",)),
     ServiceDefinition("cloudflare", "Cloudflare", ("cloudflared", "cloudflare")),
-    ServiceDefinition("mcp", "MCP", ("mcp",), displayed=False),
+    ServiceDefinition("mcp", "MCP", ("mcp",)),
     ServiceDefinition("nextcloud", "Nextcloud"),
     ServiceDefinition("immich", "Immich"),
     ServiceDefinition("technical_blog", "Technical Blog"),
 )
 SERVICES_BY_ID = {service.id: service for service in SERVICE_DEFINITIONS}
 SERVICE_IDS = tuple(SERVICES_BY_ID)
+
+# Firmware limits (ServicesLogic.h): at most MAX_SERVICES entries, ids of
+# [a-z0-9_-] and labels of printable ASCII, each at most 23 characters.
+MAX_SERVICES = 16
+SERVICE_ID_MAX = 23
+SERVICE_LABEL_MAX = 23

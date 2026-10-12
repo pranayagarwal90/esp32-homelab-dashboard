@@ -175,25 +175,23 @@ static void testMore() {
 }
 
 static void testServices() {
-  // Online / offline / unknown (missing key) per service.
-  uint8_t reported = (1u << SVC_JELLYFIN) | (1u << SVC_OLLAMA) | (1u << SVC_IMMICH);
-  uint8_t online = (1u << SVC_JELLYFIN) | (1u << SVC_NAVIDROME); // Navidrome not reported.
-  assert(serviceDot(reported, online, SVC_JELLYFIN) == ServiceDot::Online);
-  assert(serviceDot(reported, online, SVC_OLLAMA) == ServiceDot::Offline);
-  assert(serviceDot(reported, online, SVC_NAVIDROME) == ServiceDot::Unknown);
-  assert(serviceDot(reported, online, SVC_METUBE) == ServiceDot::Unknown);
-  assert(serviceDot(0xFF, 0xFF, -1) == ServiceDot::Unknown);
-  assert(serviceDot(0xFF, 0xFF, SVC_COUNT) == ServiceDot::Unknown);
-  // The list: real health checks only (no Bazarr / MCP), all rows above BACK.
-  const char* keys[] = {"jellyfin", "navidrome", "metube", "ollama", "cloudflare", "nextcloud", "immich",
-                        "technical_blog"};
-  assert(SVC_COUNT == 8);
-  for (int i = 0; i < SVC_COUNT; i++) {
-    assert(strcmp(SERVICE_LIST[i].key, keys[i]) == 0);
-    assert(strcmp(SERVICE_LIST[i].key, "bazarr") != 0 && strcmp(SERVICE_LIST[i].key, "mcp") != 0);
-  }
-  assert(SERVICES_Y0 + SVC_COUNT * SERVICES_PITCH <= NAV_Y);
+  // Online / offline / unknown per status.
+  assert(serviceDot(SERVICE_UP) == ServiceDot::Online);
+  assert(serviceDot(SERVICE_DOWN) == ServiceDot::Offline);
+  assert(serviceDot(SERVICE_UNKNOWN) == ServiceDot::Unknown);
+  assert(serviceDot(7) == ServiceDot::Unknown);
+  // A full page of rows stays above the bottom bar.
+  assert(SERVICES_Y0 + SERVICES_PER_PAGE * SERVICES_PITCH <= NAV_Y);
   assert(SERVICES_PITCH >= 20);
+  // Paging: 8 per page; MAX_SERVICES needs two pages.
+  assert(pageCountFor(0, SERVICES_PER_PAGE) == 1 && pageCountFor(8, SERVICES_PER_PAGE) == 1);
+  assert(pageCountFor(9, SERVICES_PER_PAGE) == 2 && pageCountFor(MAX_SERVICES, SERVICES_PER_PAGE) == 2);
+  assert(clampPageIndex(5, 9, SERVICES_PER_PAGE) == 1 && clampPageIndex(-1, 9, SERVICES_PER_PAGE) == 0);
+  assert(clampPageIndex(1, 3, SERVICES_PER_PAGE) == 0); // List shrank: back to a real page.
+  // One page: the whole bar is BACK; several: PREV | BACK | NEXT.
+  assert(pagerBarAt(20, 220, 1) == PagerHit::Back && pagerBarAt(300, 220, 1) == PagerHit::Back);
+  assert(pagerBarAt(20, 220, 2) == PagerHit::Prev && pagerBarAt(160, 220, 2) == PagerHit::Back);
+  assert(pagerBarAt(300, 220, 2) == PagerHit::Next && pagerBarAt(160, 100, 2) == PagerHit::None);
 }
 
 // Bounding box of one step on the 24 grid (x0, y0, x1, y1 inclusive).

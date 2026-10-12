@@ -9,6 +9,7 @@
 #include "AlertLogic.h"
 #include "AlertManager.h"
 #include "ServicesLogic.h"
+#include "StatusParse.h"
 #include "DeviceConfig.h"
 #include "AppState.h"
 #include "BacklightPwm.h"
@@ -198,36 +199,11 @@ static StatusOutcome readStatus(const StatusRequest& request, StatusSnapshot& sn
     docker.displayedContainers++;
   }
 
-  services.serviceJellyfin = doc["services"]["jellyfin"] | false;
-  services.serviceNavidrome = doc["services"]["navidrome"] | false;
-  services.serviceNextcloud = doc["services"]["nextcloud"] | false;
-  services.serviceImmich = doc["services"]["immich"] | false;
-  services.serviceOllama = doc["services"]["ollama"] | false;
-  services.serviceCloudflare = doc["services"]["cloudflare"] | false;
-  services.serviceTechnicalBlog = doc["services"]["technical_blog"] | false;
-  services.serviceMetube = doc["services"]["metube"] | false;
-
-  static const struct { const char* key; AlertService service; } MONITORED[] = {
-    {"jellyfin", ALERT_JELLYFIN}, {"navidrome", ALERT_NAVIDROME}, {"metube", ALERT_METUBE},
-    {"ollama", ALERT_OLLAMA}, {"cloudflare", ALERT_CLOUDFLARE},
-  };
-  services.reported = services.online = 0;
-  for (int id = 0; id < SVC_COUNT; id++) {
-    JsonVariantConst value = doc["services"][SERVICE_LIST[id].key];
-    if (!value.is<bool>()) continue;
-    services.reported |= 1u << id;
-    if (value.as<bool>()) services.online |= 1u << id;
-  }
-  services.alertReported = 0;
-  for (const auto& monitored : MONITORED) {
-    if (doc["services"][monitored.key].is<bool>()) services.alertReported |= 1u << monitored.service;
-  }
+  parseServices(doc.as<JsonVariantConst>(), services);
 
   time.localTime = doc["timezones"]["local"]["time"].as<String>();
   time.localDate = doc["timezones"]["local"]["date"].as<String>();
-  time.indiaTime = doc["timezones"]["india"]["time"].as<String>();
-  time.singaporeTime = doc["timezones"]["singapore"]["time"].as<String>();
-  time.londonTime = doc["timezones"]["london"]["time"].as<String>();
+  parseWorldClocks(doc.as<JsonVariantConst>(), time.worldClocks);
 
   time.currentYear = doc["timezones"]["local"]["year"] | time.currentYear;
   time.currentMonth = doc["timezones"]["local"]["month"] | time.currentMonth;

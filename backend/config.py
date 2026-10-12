@@ -52,6 +52,9 @@ DEFAULT_AI_FALLBACK_MODEL = "llama3.2:3b"
 
 # Status keys reserved by the API; a world clock may not reuse them.
 RESERVED_CLOCK_KEYS = {"local"}
+# Firmware limits (WorldClockLogic.h).
+MAX_WORLD_CLOCKS = 8
+CLOCK_LABEL_MAX = 20
 
 _KEY = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 _SERVICE_KEY = re.compile(r"SERVICE_([A-Z0-9_]+)_HEALTH_URL")
@@ -245,13 +248,16 @@ def parse_world_clocks(text, name="DASHBOARD_WORLD_CLOCKS"):
     text = text.strip()
     if not text:
         return ()
+    items = text.split(",")
+    if len(items) > MAX_WORLD_CLOCKS:
+        raise ConfigError(f"{name}: at most {MAX_WORLD_CLOCKS} clocks")
     clocks, keys = [], set()
-    for item in text.split(","):
+    for item in items:
         label, separator, zone = (part.strip() for part in item.partition("="))
         if not separator or not label or not zone:
             raise ConfigError(f"{name}: {item.strip()!r}: expected Label=Area/City")
-        if len(label) > 24 or not re.fullmatch(r"[A-Za-z0-9 ._-]+", label):
-            raise ConfigError(f"{name}: label {label!r}: use up to 24 letters, digits, spaces, . _ -")
+        if len(label) > CLOCK_LABEL_MAX or not re.fullmatch(r"[A-Za-z0-9 ._-]+", label):
+            raise ConfigError(f"{name}: label {label!r}: use up to {CLOCK_LABEL_MAX} letters, digits, spaces, . _ -")
         key = re.sub(r"[^a-z0-9]+", "_", label.lower()).strip("_")
         if not key or key in RESERVED_CLOCK_KEYS or key in keys:
             raise ConfigError(f"{name}: label {label!r} is reserved or repeated")

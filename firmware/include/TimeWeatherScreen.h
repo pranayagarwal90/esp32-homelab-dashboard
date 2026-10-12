@@ -1,5 +1,6 @@
 #pragma once
 
-// Local time, weather and world clocks. Main task only.
+// CLOCKS: local time, weather and the backend's world clocks (three per
+// page, PREV / NEXT when there are more). Main task only.
 void drawTimePage();
 void handleTimeTouch(int x, int y);

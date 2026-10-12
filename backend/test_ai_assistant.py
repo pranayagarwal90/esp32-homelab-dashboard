@@ -27,7 +27,7 @@ globals_ = backend["get_status"].__globals__
 def status(ram=87.4, metube=False, host=True, disk_d=50.2, cloudflare=True, immich=None):
     services = {"jellyfin": True, "navidrome": True, "metube": metube, "ollama": True,
                 "cloudflare": cloudflare, "nextcloud": True, "technical_blog": True,
-                "bazarr": False, "mcp": False}
+                "bazarr": None, "mcp": None}  # Legacy object: null = not in SERVICES.
     if immich is not None:
         services["immich"] = immich
     return {
@@ -197,7 +197,7 @@ class ContextTests(unittest.TestCase):
 
     def test_offline_service_without_dashboard_alert(self):
         data = status(metube=True)
-        data["services"]["nextcloud"] = False  # Not an alertable service.
+        data["services"]["nextcloud"] = False  # Offline, but no dashboard alert (yet).
         facts = A.build_facts(data, [])
         self.assertIn("OFFLINE, no dashboard alert: Nextcloud", A.build_context(facts))
         self.assertEqual(A.title_for(facts), "All systems healthy")  # Same verdict as the dashboard.
@@ -278,7 +278,7 @@ class CleanupTests(unittest.TestCase):
         summary, action, source = self.finalize("SUMMARY: The homelab looks busy today.\nACTION: Check things.")
         self.assertEqual(source, "rules")
         self.assertEqual(summary, "MeTube is offline. RAM usage is 87%.")
-        self.assertEqual(action, "Check the MeTube container status and logs.")
+        self.assertEqual(action, "Check the MeTube service status and logs.")
 
     def test_online_service_called_offline_falls_back(self):
         _, _, source = self.finalize("SUMMARY: MeTube is offline, while Jellyfin is offline but no alert.\nACTION: Check MeTube.")
@@ -303,9 +303,9 @@ class CleanupTests(unittest.TestCase):
 
     def test_none_action_and_unsafe_action(self):
         self.assertEqual(self.finalize("SUMMARY: MeTube is offline.\nACTION: None")[1],
-                         "Check the MeTube container status and logs.")  # Problems need a check.
+                         "Check the MeTube service status and logs.")  # Problems need a check.
         self.assertEqual(self.finalize("SUMMARY: MeTube is offline.\nACTION: Restart MeTube.")[1],
-                         "Check the MeTube container status and logs.")
+                         "Check the MeTube service status and logs.")
 
     def test_empty_answer_uses_rules(self):
         self.assertEqual(self.finalize("")[2], "rules")
@@ -685,7 +685,8 @@ class EndpointTests(unittest.TestCase):
             result = backend["get_status"]()
         self.assertEqual(set(result), {
             "hostname", "host_available", "uptime_hours", "cpu", "memory", "disks", "gpu",
-            "wifi", "ethernet", "docker", "services", "timezones", "weather", "timestamp"})
+            "wifi", "ethernet", "docker", "services", "timezones", "weather", "timestamp",
+            "api_version", "services_list", "world_clocks"})
 
 
 if __name__ == "__main__":

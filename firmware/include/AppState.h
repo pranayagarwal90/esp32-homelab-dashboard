@@ -1,6 +1,8 @@
 #pragma once
 #include <Arduino.h>
 #include "Pages.h"
+#include "ServicesLogic.h"
+#include "WorldClockLogic.h"
 #include "WeatherLogic.h"
 
 // Application state shared between screens. Main task only: the status worker
@@ -39,29 +41,12 @@ struct DockerData {
   int totalRunningContainers = 0;
 };
 
-struct ServiceState {
-  bool serviceJellyfin = false;
-  bool serviceNavidrome = false;
-  bool serviceNextcloud = false;
-  bool serviceImmich = false;
-  bool serviceOllama = false;
-  bool serviceCloudflare = false;
-  bool serviceTechnicalBlog = false;
-  bool serviceMetube = false;
-  // Monitored health keys actually present in the response (AlertService
-  // bits); a missing key is unknown, not offline.
-  uint8_t alertReported = 0;
-  // SERVICES list (ServiceId bits): key present as a bool / reported healthy.
-  uint8_t reported = 0;
-  uint8_t online = 0;
-};
+// Monitored services: ServiceState (ServicesLogic.h), from services_list.
 
 struct TimeData {
   String localTime = "--:--";
   String localDate = "---";
-  String indiaTime = "--:--";
-  String singaporeTime = "--:--";
-  String londonTime = "--:--";
+  WorldClockState worldClocks;  // Backend-configured; none by default.
   int currentYear = 2026;
   int currentMonth = 1;
   int currentDay = 1;

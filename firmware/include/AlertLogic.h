@@ -2,26 +2,23 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include "ServicesLogic.h"
 
 // Pure homelab alert evaluation, shared with host tests. Active alerts only:
 // a fixed table of slots, one per monitored condition, so each condition has
 // a stable identity and can never be duplicated. No heap, no Strings.
+//
+// Services come from the backend's list (ServicesLogic.h): each listed
+// service holds one of MAX_SERVICES slots, keyed by its id, for as long as it
+// is listed; down = warning, up or unknown = none. A service that leaves the
+// list releases its slot, and with it any alert.
 
 enum class AlertSeverity : uint8_t { None, Info, Warning, Critical };
 enum class AlertKind : uint8_t { ServiceOffline, RamHigh, DiskHigh, StatusStale };
 
-// Monitored services; also the bit positions of the reported/online masks.
-enum AlertService : uint8_t {
-  ALERT_JELLYFIN,
-  ALERT_NAVIDROME,
-  ALERT_METUBE,
-  ALERT_OLLAMA,
-  ALERT_CLOUDFLARE,
-  ALERT_SERVICE_COUNT
-};
-
+constexpr int ALERT_SERVICE_SLOTS = MAX_SERVICES;
 constexpr int ALERT_MAX_DISKS = 4;
-constexpr int ALERT_SLOT_RAM = ALERT_SERVICE_COUNT;
+constexpr int ALERT_SLOT_RAM = ALERT_SERVICE_SLOTS;
 constexpr int ALERT_SLOT_DISK0 = ALERT_SLOT_RAM + 1;
 constexpr int ALERT_SLOT_STALE = ALERT_SLOT_DISK0 + ALERT_MAX_DISKS;
 constexpr int ALERT_SLOT_COUNT = ALERT_SLOT_STALE + 1;
@@ -44,8 +41,15 @@ struct Alert {
   char subject[ALERT_SUBJECT_MAX] = {};          // Disk name, disk slots only.
 };
 
+// Which service a service slot belongs to ("" = free) and its label.
+struct AlertServiceKey {
+  char id[SERVICE_ID_SIZE] = {};
+  char label[SERVICE_LABEL_SIZE] = {};
+};
+
 struct AlertTable {
   Alert slots[ALERT_SLOT_COUNT];
+  AlertServiceKey services[ALERT_SERVICE_SLOTS];
   bool haveStatus = false;      // At least one successful status evaluated.
   uint8_t failures = 0;         // Consecutive failed fetches.
   uint32_t lastSuccessMs = 0;   // Anchor of the stale clock (boot = 0).
@@ -58,8 +62,9 @@ struct AlertInput {
   int diskCount = 0;
   const char* diskNames[ALERT_MAX_DISKS] = {};
   float diskPercent[ALERT_MAX_DISKS] = {};
-  uint8_t servicesReported = 0; // Bit per AlertService: key present as a bool.
-  uint8_t servicesOnline = 0;   // Bit per AlertService: reported healthy.
+  // The listed services (the device always passes them; nullptr leaves the
+  // service alerts as they are).
+  const ServiceState* services = nullptr;
 };
 
 inline AlertKind alertKindOf(int slot) {
@@ -118,9 +123,50 @@ inline int alertDiskSlot(AlertTable& table, const char* subject, const bool clai
   return -1;
 }
 
-// A successful status fetch. Services are evaluated only when reported;
-// RAM/disks only when the host metrics are valid, otherwise they keep their
-// previous state. Clears the stale alert. Returns true if anything changed.
+// The service slot keyed to id, or -1.
+inline int alertServiceSlot(const AlertTable& table, const char* id) {
+  for (int slot = 0; slot < ALERT_SERVICE_SLOTS; slot++) {
+    if (table.services[slot].id[0] && strcmp(table.services[slot].id, id) == 0) return slot;
+  }
+  return -1;
+}
+
+// The listed services are the whole truth: an unlisted service has nothing to
+// alert on (removed from the backend's SERVICES), so its slot is released;
+// each listed one keeps (or claims) a slot in list order.
+inline bool alertsApplyServices(AlertTable& table, const ServiceState& services, uint32_t nowMs) {
+  bool changed = false;
+  for (int slot = 0; slot < ALERT_SERVICE_SLOTS; slot++) {
+    AlertServiceKey& key = table.services[slot];
+    if (!key.id[0] || findService(services, key.id) >= 0) continue;
+    changed |= setAlert(table.slots[slot], AlertSeverity::None, 0, nowMs);
+    key = AlertServiceKey();
+  }
+  for (int i = 0; i < services.count; i++) {
+    const ServiceStatus& service = services.items[i];
+    int slot = alertServiceSlot(table, service.id);
+    for (int free = 0; slot < 0 && free < ALERT_SERVICE_SLOTS; free++) {
+      if (!table.services[free].id[0]) {
+        slot = free;
+        snprintf(table.services[slot].id, SERVICE_ID_SIZE, "%s", service.id);
+      }
+    }
+    if (slot < 0) continue; // Cannot happen: a list never exceeds the slots.
+    Alert& alert = table.slots[slot];
+    if (strcmp(table.services[slot].label, service.label) != 0) {
+      snprintf(table.services[slot].label, SERVICE_LABEL_SIZE, "%s", service.label);
+      changed |= alert.severity != AlertSeverity::None; // Its title changed.
+    }
+    AlertSeverity severity = service.status == SERVICE_DOWN ? AlertSeverity::Warning : AlertSeverity::None;
+    changed |= setAlert(alert, severity, 0, nowMs);
+  }
+  return changed;
+}
+
+// A successful status fetch. Services follow the reported list (an empty
+// list clears every service alert); RAM/disks
+// only when the host metrics are valid, otherwise they keep their previous
+// state. Clears the stale alert. Returns true if anything changed.
 inline bool alertsApplyStatus(AlertTable& table, const AlertInput& input, uint32_t nowMs) {
   bool changed = !table.haveStatus;
   table.haveStatus = true;
@@ -128,11 +174,7 @@ inline bool alertsApplyStatus(AlertTable& table, const AlertInput& input, uint32
   table.lastSuccessMs = nowMs;
   changed |= setAlert(table.slots[ALERT_SLOT_STALE], AlertSeverity::None, 0, nowMs);
 
-  for (int i = 0; i < ALERT_SERVICE_COUNT; i++) {
-    if (!(input.servicesReported & (1u << i))) continue; // Unknown, not offline.
-    bool online = input.servicesOnline & (1u << i);
-    changed |= setAlert(table.slots[i], online ? AlertSeverity::None : AlertSeverity::Warning, 0, nowMs);
-  }
+  if (input.services) changed |= alertsApplyServices(table, *input.services, nowMs);
 
   if (!input.hostAvailable) return changed;
 
@@ -217,12 +259,14 @@ inline const char* alertSeverityLabel(AlertSeverity severity) {
   }
 }
 
+// Service alerts use the backend's label.
 inline void alertTitle(const AlertTable& table, int slot, char* out, size_t size) {
-  static const char* const SERVICE_NAMES[ALERT_SERVICE_COUNT] = {
-    "Jellyfin", "Navidrome", "MeTube", "Ollama", "Cloudflare"
-  };
   switch (alertKindOf(slot)) {
-    case AlertKind::ServiceOffline: snprintf(out, size, "%s", SERVICE_NAMES[slot]); break;
+    case AlertKind::ServiceOffline: {
+      const AlertServiceKey& key = table.services[slot];
+      snprintf(out, size, "%s", key.label[0] ? key.label : key.id);
+      break;
+    }
     case AlertKind::RamHigh: snprintf(out, size, "RAM"); break;
     case AlertKind::DiskHigh: snprintf(out, size, "Disk %s", table.slots[slot].subject); break;
     case AlertKind::StatusStale: snprintf(out, size, "Status data"); break;

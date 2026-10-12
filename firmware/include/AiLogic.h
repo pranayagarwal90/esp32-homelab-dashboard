@@ -81,7 +81,8 @@ constexpr size_t AI_SUMMARY_MAX = 256; // Backend sends <= 220.
 constexpr size_t AI_ACTION_MAX = 192;  // Backend sends <= 140.
 constexpr size_t AI_ERROR_MAX = 96;
 constexpr size_t AI_RESPONSE_MAX = 1536; // Whole HTTP body.
-constexpr size_t AI_REQUEST_MAX = 640;   // POST body (mode + up to 10 alert codes).
+constexpr size_t AI_REQUEST_MAX = 768;   // POST body (mode + up to AI_MAX_ALERTS alert codes).
+constexpr int AI_MAX_ALERTS = 12;        // The backend accepts at most 12.
 
 enum class AiState : uint8_t { Idle, Loading, Success, Error };
 // Which HomeServer-side Ollama answered: the GPU laptop (primary) or the
@@ -172,11 +173,10 @@ inline void aiFooterLabel(const AiResponse& response, char* out, size_t size) {
 
 // --- Request body ---------------------------------------------------------------------
 
+// A service alert's code is the backend's service id (validated on parse).
 inline const char* aiAlertId(const AlertTable& table, int slot) {
-  static const char* const SERVICES[ALERT_SERVICE_COUNT] = {"jellyfin", "navidrome", "metube", "ollama", "cloudflare"};
-  (void)table;
   switch (alertKindOf(slot)) {
-    case AlertKind::ServiceOffline: return SERVICES[slot];
+    case AlertKind::ServiceOffline: return table.services[slot].id;
     case AlertKind::RamHigh: return "ram";
     case AlertKind::DiskHigh: return "disk";
     case AlertKind::StatusStale: return "stale";
@@ -196,10 +196,12 @@ inline bool aiSubjectValid(const char* subject) {
   return true;
 }
 
-// {"mode":"alerts","refresh":true,"alerts":[{"id":"metube","level":"warning"},
+// {"mode":"alerts","refresh":true,"alerts":[{"id":"<service id>","level":"warning"},
 //  {"id":"disk","level":"critical","subject":"C:"}]}
 // The dashboard's own alert verdicts (its rules, hysteresis and stale state)
-// as fixed codes; no metrics. Returns the length, or 0 if it did not fit.
+// as codes; no metrics. At most AI_MAX_ALERTS (the backend's limit), most
+// severe first. Returns the length, or 0 if it did not fit (never a
+// truncated alert list). AI_REQUEST_MAX fits AI_MAX_ALERTS of the longest.
 inline size_t aiRequestBody(AiMode mode, bool refresh, const AlertTable& table, char* out, size_t size) {
   if (!out || size == 0) return 0;
   int n = snprintf(out, size, "{\"mode\":\"%s\"%s", aiModeInfo(mode).key, refresh ? ",\"refresh\":true" : "");
@@ -212,18 +214,28 @@ inline size_t aiRequestBody(AiMode mode, bool refresh, const AlertTable& table, 
     bool first = true;
     uint8_t order[ALERT_SLOT_COUNT];
     int count = alertsSorted(table, order);
-    for (int i = 0; i < count && (size_t)n < size; i++) {  // Stops once full.
+    int sent = 0;
+    for (int i = 0; i < count && sent < AI_MAX_ALERTS && (size_t)n < size; i++) {
       const Alert& alert = table.slots[order[i]];
       const char* level = alert.severity == AlertSeverity::Critical ? "critical"
                           : alert.severity == AlertSeverity::Warning ? "warning" : nullptr;
       if (!level) continue;
       bool disk = alertKindOf(order[i]) == AlertKind::DiskHigh;
       if (disk && !aiSubjectValid(alert.subject)) continue;
-      n += snprintf(out + n, size - n, "%s{\"id\":\"%s\",\"level\":\"%s\"", first ? "" : ",",
-                    aiAlertId(table, order[i]), level);
-      if (disk && (size_t)n < size) n += snprintf(out + n, size - n, ",\"subject\":\"%s\"", alert.subject);
-      if ((size_t)n < size) n += snprintf(out + n, size - n, "}");
+      if (alertKindOf(order[i]) == AlertKind::ServiceOffline && !validServiceId(aiAlertId(table, order[i]))) continue;
+      char item[96];
+      int length = snprintf(item, sizeof(item), "%s{\"id\":\"%s\",\"level\":\"%s\"%s%s%s}", first ? "" : ",",
+                            aiAlertId(table, order[i]), level, disk ? ",\"subject\":\"" : "",
+                            disk ? alert.subject : "", disk ? "\"" : "");
+      // Room for this item plus the closing "]}"; otherwise fail below.
+      if (length < 0 || (size_t)length >= sizeof(item) || (size_t)(n + length + 2) >= size) {
+        n = (int)size;
+        break;
+      }
+      memcpy(out + n, item, length + 1);
+      n += length;
       first = false;
+      sent++;
     }
     if ((size_t)n < size) n += snprintf(out + n, size - n, "]");
   }

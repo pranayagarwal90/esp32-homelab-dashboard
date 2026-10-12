@@ -25,7 +25,8 @@ with patch.dict(os.environ, {"DASHBOARD_ENV_FILE": ""}), patch("http.server.HTTP
 globals_ = backend["get_status"].__globals__
 
 STATUS_KEYS = {"hostname", "host_available", "uptime_hours", "cpu", "memory", "disks", "gpu", "wifi",
-               "ethernet", "docker", "services", "timezones", "weather", "timestamp"}
+               "ethernet", "docker", "services", "timezones", "weather", "timestamp",
+               "api_version", "services_list", "world_clocks"}
 
 
 def load(environ=None, text=None):

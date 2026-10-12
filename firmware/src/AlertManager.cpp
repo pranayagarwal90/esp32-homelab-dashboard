@@ -15,14 +15,7 @@ bool alertsOnStatus() {
     input.diskNames[i] = metrics.diskNames[i].c_str();
     input.diskPercent[i] = metrics.diskPercentages[i];
   }
-  input.servicesReported = services.alertReported;
-  const bool online[ALERT_SERVICE_COUNT] = {
-    services.serviceJellyfin, services.serviceNavidrome, services.serviceMetube,
-    services.serviceOllama, services.serviceCloudflare,
-  };
-  for (int i = 0; i < ALERT_SERVICE_COUNT; i++) {
-    if (online[i]) input.servicesOnline |= 1u << i;
-  }
+  input.services = &services;
   bool changed = alertsApplyStatus(table, input, millis());
   if (changed) Serial.printf("Alerts: %d active\n", alertsActiveCount(table));
   return changed;

@@ -293,10 +293,26 @@ def service_status(docker):
     return services
 
 
-# World-clock keys the current firmware reads by name (StatusClient.cpp).
-# Until world clocks are data-driven there, each one that is not configured
-# is sent as a "--:--" placeholder so the clocks page never shows garbage.
+def services_list(services):
+    """The monitored services for /api/status `services_list`: [{id, label,
+    status}] in registry order, SERVICES ids only (never an unconfigured
+    one). Every listed service is checked, so status is true or false."""
+    return [{"id": service_id, "label": SERVICES_BY_ID[service_id].label,
+             "status": services.get(service_id) is True}
+            for service_id in CONFIG.enabled_services]
+
+
+# Legacy (firmware 1.0.x): world-clock keys read by name from `timezones`.
+# Each one that is not configured is sent as a "--:--" placeholder so those
+# clocks pages never show garbage. Newer firmware uses `world_clocks`.
 LEGACY_CLOCK_KEYS = ("india", "singapore", "london")
+
+
+def world_clocks(times):
+    """DASHBOARD_WORLD_CLOCKS for /api/status `world_clocks`, in config order:
+    [{label, timezone, time}], time as in `timezones` ("1:42 PM")."""
+    return [{"label": clock.label, "timezone": clock.zone, "time": times[clock.key]["time"]}
+            for clock in CONFIG.world_clocks]
 
 
 def get_times():
@@ -556,11 +572,20 @@ def list_photos():
     )
 
 
+# /api/status schema: 2 adds services_list and world_clocks (legacy
+# services/timezones keys are still sent). Informational; clients detect
+# fields by presence.
+API_VERSION = 2
+
+
 def get_status():
     host = get_windows_metrics()
     docker = docker_status()
+    services = service_status(docker)
+    times = get_times()
 
     return {
+        "api_version": API_VERSION,
         "hostname": host.get("hostname", CONFIG.host_label),
         "host_available": host.get("available", False),
         "uptime_hours": host.get("uptime_hours", 0),
@@ -571,8 +596,10 @@ def get_status():
         "wifi": host.get("wifi", {}),
         "ethernet": host.get("ethernet", {}),
         "docker": docker,
-        "services": service_status(docker),
-        "timezones": get_times(),
+        "services": services,
+        "services_list": services_list(services),
+        "timezones": times,
+        "world_clocks": world_clocks(times),
         "weather": weather_payload(get_weather(), time.time()),
         "timestamp": int(time.time()),
     }
