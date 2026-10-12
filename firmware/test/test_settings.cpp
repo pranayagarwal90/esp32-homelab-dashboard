@@ -173,7 +173,7 @@ static void testHierarchy() {
   assert(settingsMenuFor(SettingsView::Connectivity, menu) && menu.count == 3);
   assert(tapRow(SettingsView::Connectivity, 0).target == SettingsView::Wifi);
   assert(tapRow(SettingsView::Connectivity, 1).target == SettingsView::Server);
-  assert(strcmp(tapRow(SettingsView::Connectivity, 1).label, "DASHBOARD SERVER") == 0);
+  assert(strcmp(tapRow(SettingsView::Connectivity, 1).label, "HOMEDECK BACKEND") == 0);
   assert(tapRow(SettingsView::Connectivity, 1).confirm == ConfirmAction::None);
   assert(tapRow(SettingsView::Connectivity, 2).target == SettingsView::Bluetooth);
 
@@ -325,7 +325,11 @@ static void testWifiSelection() {
 
   // Confirmation for the setup hotspot names both things it can change.
   assert(strcmp(confirmText(ConfirmAction::StartWifiSetup).title, "START SETUP?") == 0);
-  assert(strstr(confirmText(ConfirmAction::StartWifiSetup).line2, "dashboard server") != nullptr);
+  assert(strstr(confirmText(ConfirmAction::StartWifiSetup).line2, "HomeDeck Backend") != nullptr);
+  // Removing the backend: confirmed, says Wi-Fi is kept, and fits the dialog.
+  ConfirmText remove = confirmText(ConfirmAction::RemoveBackend);
+  assert(strcmp(remove.confirmLabel, "REMOVE") == 0 && strstr(remove.line2, "Wi-Fi stays saved"));
+  assert(strlen(remove.title) * 12 <= 300 && strlen(remove.line1) * 6 <= 300 && strlen(remove.line2) * 6 <= 300);
 
   assert(validWifiInput("Home", 4, 0));     // Open network.
   assert(validWifiInput("Home", 4, 8));

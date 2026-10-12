@@ -2,6 +2,7 @@
 #include <TJpg_Decoder.h>
 #include "PhotoScreen.h"
 #include "AppState.h"
+#include "DeviceConfig.h"
 #include "Display.h"
 #include "PageRouter.h"
 #include "PhotoClient.h"
@@ -58,6 +59,12 @@ static void drawNoPhotos() {
   drawBackBar(nullptr, "BACK", nullptr);
 }
 
+static void drawPhotoSourceNotice() {
+  tft.fillScreen(TFT_BLACK);
+  drawBackendNotice(BackendFeature::Photos, 80);
+  drawBackBar(nullptr, "BACK", nullptr);
+}
+
 static void drawPhotoError() {
   tft.fillScreen(TFT_BLACK);
   tft.setTextSize(2);
@@ -89,7 +96,7 @@ static int wallpaperIndex() {
 // Submits the next job if the slot is free: the wanted photo (or the list it
 // needs first), otherwise the boot prefetch. Never blocks.
 static void pumpPhotoRequests() {
-  if (photoTracker.busy()) return;
+  if (!backendConfigured() || photoTracker.busy()) return; // Standalone: no photo source.
 
   PhotoJob job = {};
   if (photoTracker.needsRequest()) {
@@ -193,6 +200,7 @@ void requestPhotoList() {
 }
 
 bool requestScreensaverPhoto() {
+  if (!backendConfigured()) return false; // The screensaver keeps its clock.
   if (photoListLoaded && photoCount == 0) return false;
   photoTracker.want(PhotoPurpose::Screensaver);
   pumpPhotoRequests();
@@ -205,6 +213,12 @@ bool isScreensaverPhotoPending() {
 
 void drawPhotosPage() {
   app.currentPage = PAGE_PHOTOS;
+
+  if (!backendConfigured()) {
+    photoPageShown = true;
+    drawPhotoSourceNotice();
+    return;
+  }
 
   if (photoListLoaded && photoCount == 0) {
     photoTracker.cancel(PhotoPurpose::Page);
@@ -226,7 +240,9 @@ void drawPhotosPage() {
 }
 
 void handlePhotosTouch(int x, int y) {
-  if (y >= 205) {
+  if (y >= 205 && !backendConfigured()) {
+    showPage(PAGE_MORE);
+  } else if (y >= 205) {
     if (x < 106 && photoCount > 0) {
       photoIndex = (photoIndex - 1 + photoCount) % photoCount;
       drawPhotosPage();

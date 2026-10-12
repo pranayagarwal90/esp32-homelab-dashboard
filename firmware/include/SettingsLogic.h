@@ -15,7 +15,7 @@ enum class SettingsView : uint8_t {
   DisplayMenu,
   Wifi,
   WifiSetup,
-  Server,     // Dashboard server (backend URL).
+  Server,     // HomeDeck Backend (optional backend URL).
   Brightness,
   Screensaver,
   Bluetooth,
@@ -40,7 +40,8 @@ constexpr int SETTINGS_LIST_H = 36;
 constexpr int SETTINGS_LIST_PITCH = 41;
 constexpr int SETTINGS_LIST_MAX_ROWS = 4;
 
-enum class ConfirmAction : uint8_t { None, Restart, Sleep, StartWifiSetup, ForgetWifi, ApplyBluetooth };
+enum class ConfirmAction : uint8_t { None, Restart, Sleep, StartWifiSetup, ForgetWifi, ApplyBluetooth,
+                                     RemoveBackend };
 
 struct SettingsMenuEntry {
   const char* label;
@@ -73,7 +74,7 @@ inline bool settingsMenuFor(SettingsView view, SettingsMenu& out) {
   };
   static const SettingsMenuEntry connectivity[] = {
     {"WI-FI", SettingsView::Wifi, A::None, UiIcon::Wifi, UiColor::Blue},
-    {"DASHBOARD SERVER", SettingsView::Server, A::None, UiIcon::HomeServer, UiColor::Green},
+    {"HOMEDECK BACKEND", SettingsView::Server, A::None, UiIcon::HomeServer, UiColor::Green},
     {"BLUETOOTH", SettingsView::Bluetooth, A::None, UiIcon::Bluetooth, UiColor::Blue},
   };
   static const SettingsMenuEntry display[] = {
@@ -170,11 +171,13 @@ inline ConfirmText confirmText(ConfirmAction action) {
     case ConfirmAction::Sleep:
       return {"SLEEP DEVICE?", "Screen and Wi-Fi turn off.", "Wake: tap screen if supported, or press RST.", "SLEEP"};
     case ConfirmAction::StartWifiSetup:
-      return {"START SETUP?", "Opens a setup hotspot to change", "Wi-Fi or the dashboard server.", "START"};
+      return {"START SETUP?", "Opens a setup hotspot to change", "Wi-Fi or the HomeDeck Backend.", "START"};
     case ConfirmAction::ForgetWifi:
       return {"USE BUILT-IN WI-FI?", "Forgets the saved network", "and reconnects (brief outage).", "SWITCH"};
     case ConfirmAction::ApplyBluetooth:
       return {"RESTART TO APPLY?", "Bluetooth changes apply", "after a restart.", "RESTART"};
+    case ConfirmAction::RemoveBackend:
+      return {"REMOVE BACKEND?", "HomeDeck keeps working on its own.", "Wi-Fi stays saved. Restarts.", "REMOVE"};
     case ConfirmAction::None:
       break;
   }

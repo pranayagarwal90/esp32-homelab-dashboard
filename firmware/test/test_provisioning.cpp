@@ -12,62 +12,87 @@
 struct Boot {
   SetupReason reason;
   BackendBootAction backend;
+  BackendConfig config;
+  DeviceMode mode;
   char url[BACKEND_URL_MAX];
 };
 
-// storedBackend nullptr = no device/backend key in NVS. fallback is a
-// developer build's DASHBOARD_DEV_BACKEND_URL (nullptr in public builds).
+static const char OVERLONG[] = "(overlong)"; // Stands for a stored value too long to read.
+
+// storedBackend nullptr = no device/backend key in NVS ("" = removed in
+// Settings). fallback is a developer build's DASHBOARD_DEV_BACKEND_URL
+// (nullptr in public builds). Mirrors main.cpp / DeviceConfig.cpp.
 static Boot boot(bool savedWifi, bool builtInWifi, const char* storedBackend, const char* fallback,
                  bool wifiJoins = true) {
   Boot b;
-  b.backend = resolveBootBackend(storedBackend != nullptr, storedBackend, fallback, b.url);
-  bool stored = storedBackend != nullptr || b.backend == BackendBootAction::Seed;
-  b.reason = bootSetupReason(savedWifi || builtInWifi, stored, b.url[0] != '\0');
+  const char* stored = storedBackend == OVERLONG ? nullptr : storedBackend;
+  b.backend = resolveBootBackend(storedBackend != nullptr, stored, fallback, b.url);
+  b.config = backendConfigFor(b.backend);
+  bool hasNetwork = savedWifi || builtInWifi;
+  b.reason = bootSetupReason(hasNetwork, b.config);
   if (b.reason == SetupReason::None && !wifiJoins) b.reason = SetupReason::WifiFailed;
+  b.mode = b.reason == SetupReason::None ? deviceMode(true, b.config) : DeviceMode::Setup;
   return b;
 }
 
 static void testBootStates() {
   const char* url = "http://192.0.2.10:8090";
-  // 1. Saved Wi-Fi + backend: normal.
-  Boot b = boot(true, false, url, nullptr);
-  assert(b.reason == SetupReason::None && b.backend == BackendBootAction::Use && strcmp(b.url, url) == 0);
-  // 2. No Wi-Fi, backend saved: setup.
-  assert(boot(false, false, url, nullptr).reason == SetupReason::NoWifi);
-  // 3. Wi-Fi saved (e.g. by older firmware), no backend: setup asks for it.
+  // 1. Fresh device: no Wi-Fi, no backend -> Setup.
+  Boot b = boot(false, false, nullptr, nullptr);
+  assert(b.reason == SetupReason::NoConfig && b.mode == DeviceMode::Setup);
+  // 2. No Wi-Fi, backend saved -> Setup, and the backend is kept (still resolved).
+  b = boot(false, false, url, nullptr);
+  assert(b.reason == SetupReason::NoWifi && b.mode == DeviceMode::Setup);
+  assert(b.backend == BackendBootAction::Use && strcmp(b.url, url) == 0);
+  // 3. Wi-Fi saved, no backend -> dashboard, Standalone Mode (no setup).
   b = boot(true, false, nullptr, nullptr);
-  assert(b.reason == SetupReason::NoBackend && b.backend == BackendBootAction::Setup && b.url[0] == '\0');
-  // 4. Fresh device: neither.
-  assert(boot(false, false, nullptr, nullptr).reason == SetupReason::NoConfig);
-  // 5. Corrupted backend value: setup (never silently replaced).
-  assert(boot(true, false, "not a url", nullptr).reason == SetupReason::BadBackend);
-  assert(boot(true, false, "", nullptr).reason == SetupReason::BadBackend);            // Overlong reads as "".
-  assert(boot(true, false, "garbage", url).reason == SetupReason::BadBackend);         // Even with a fallback.
-  assert(boot(true, false, "garbage", url).backend == BackendBootAction::Setup);
-  // 6. Current device upgrading with a developer build: Wi-Fi in NVS (or the
-  //    built-in network), no backend key, fallback configured: seeded once.
+  assert(b.reason == SetupReason::None && b.mode == DeviceMode::Standalone);
+  assert(b.config == BackendConfig::NotConfigured && b.url[0] == '\0');
+  // 4. Wi-Fi + backend -> Full Mode, exactly as before.
+  b = boot(true, false, url, nullptr);
+  assert(b.reason == SetupReason::None && b.mode == DeviceMode::Full && b.backend == BackendBootAction::Use &&
+         strcmp(b.url, url) == 0);
+  // 5. Saved Wi-Fi fails at boot -> Setup (WifiFailed, retried), backend or not.
+  assert(boot(true, false, url, nullptr, false).reason == SetupReason::WifiFailed);
+  assert(boot(true, false, nullptr, nullptr, false).reason == SetupReason::WifiFailed);
+  assert(boot(true, false, url, nullptr, false).backend == BackendBootAction::Use); // Not erased.
+
+  // Removed in Settings ("" stored): Standalone, and never re-seeded, even by
+  // a developer build with a default.
+  b = boot(true, false, "", nullptr);
+  assert(b.mode == DeviceMode::Standalone && b.backend == BackendBootAction::None);
+  b = boot(true, true, "", url);
+  assert(b.mode == DeviceMode::Standalone && b.backend == BackendBootAction::None && b.url[0] == '\0');
+  // A corrupted value: not used (Standalone), never silently replaced, no setup.
+  b = boot(true, false, "not a url", nullptr);
+  assert(b.mode == DeviceMode::Standalone && b.config == BackendConfig::Invalid && b.url[0] == '\0');
+  b = boot(true, false, "garbage", url);
+  assert(b.backend == BackendBootAction::Invalid && b.mode == DeviceMode::Standalone); // Even with a fallback.
+  b = boot(true, false, OVERLONG, nullptr);
+  assert(b.backend == BackendBootAction::Invalid && b.mode == DeviceMode::Standalone);
+  assert(boot(false, false, "garbage", nullptr).reason == SetupReason::NoWifi); // Something is stored.
+
+  // Developer build upgrading a device whose backend key was never written:
+  // seeded once (Full Mode).
   b = boot(true, true, nullptr, "  http://192.0.2.10:8090/ ");
-  assert(b.reason == SetupReason::None && b.backend == BackendBootAction::Seed && strcmp(b.url, url) == 0);
+  assert(b.mode == DeviceMode::Full && b.backend == BackendBootAction::Seed && strcmp(b.url, url) == 0);
   b = boot(false, true, nullptr, url); // Built-in network only (secrets.h), as before.
   assert(b.reason == SetupReason::None && b.backend == BackendBootAction::Seed);
   // After seeding, NVS holds it: later boots (any build) just use it.
-  b = boot(true, false, url, nullptr);
-  assert(b.backend == BackendBootAction::Use && b.reason == SetupReason::None);
+  assert(boot(true, false, url, nullptr).backend == BackendBootAction::Use);
   // A stored value always wins over the fallback.
   b = boot(true, true, "http://192.0.2.20:8090", url);
   assert(b.backend == BackendBootAction::Use && strcmp(b.url, "http://192.0.2.20:8090") == 0);
-  // An invalid developer fallback is ignored.
-  assert(boot(true, true, nullptr, "192.0.2.10:8090").reason == SetupReason::NoBackend);
-  // 7. Public build: no fallback, no built-in network.
-  assert(boot(true, false, nullptr, nullptr).reason == SetupReason::NoBackend);
-  assert(boot(false, false, url, nullptr).reason == SetupReason::NoWifi);
+  // An invalid developer fallback is ignored: Standalone.
+  assert(boot(true, true, nullptr, "192.0.2.10:8090").mode == DeviceMode::Standalone);
+
+  // Public build (no fallback, no built-in network): fresh NVS -> Wi-Fi setup;
+  // once Wi-Fi is saved -> the normal dashboard in Standalone Mode.
+  assert(boot(false, false, nullptr, nullptr).mode == DeviceMode::Setup);
+  assert(boot(true, false, nullptr, nullptr).mode == DeviceMode::Standalone);
   // A stored value that is valid but not normalized is used, normalized.
   b = boot(true, false, "http://Server.LAN:8090/", nullptr);
   assert(b.backend == BackendBootAction::Use && strcmp(b.url, "http://server.lan:8090") == 0);
-  // Configured but the network cannot be joined: setup (credentials kept).
-  assert(boot(true, false, url, nullptr, false).reason == SetupReason::WifiFailed);
-  // Missing configuration never even tries to connect.
-  assert(boot(false, false, nullptr, nullptr, false).reason == SetupReason::NoConfig);
 
   for (int r = int(SetupReason::NoConfig); r <= int(SetupReason::WifiFailed); r++) {
     assert(strlen(setupReasonText(SetupReason(r))) > 0);
@@ -76,13 +101,18 @@ static void testBootStates() {
 }
 
 static void testBackendBootAction() {
-  // (present, valid, fallbackValid)
-  assert(backendBootAction(true, true, false) == BackendBootAction::Use);
-  assert(backendBootAction(true, true, true) == BackendBootAction::Use);
-  assert(backendBootAction(false, false, true) == BackendBootAction::Seed);
-  assert(backendBootAction(false, false, false) == BackendBootAction::Setup);
-  assert(backendBootAction(true, false, true) == BackendBootAction::Setup); // Never overwrites.
-  assert(backendBootAction(true, false, false) == BackendBootAction::Setup);
+  // (present, empty, valid, fallbackValid)
+  assert(backendBootAction(true, false, true, false) == BackendBootAction::Use);
+  assert(backendBootAction(true, false, true, true) == BackendBootAction::Use);
+  assert(backendBootAction(false, false, false, true) == BackendBootAction::Seed);
+  assert(backendBootAction(false, false, false, false) == BackendBootAction::None);
+  assert(backendBootAction(true, true, false, true) == BackendBootAction::None);     // Removed: not re-seeded.
+  assert(backendBootAction(true, false, false, true) == BackendBootAction::Invalid); // Never overwrites.
+  assert(backendBootAction(true, false, false, false) == BackendBootAction::Invalid);
+  assert(backendConfigFor(BackendBootAction::Use) == BackendConfig::Configured);
+  assert(backendConfigFor(BackendBootAction::Seed) == BackendConfig::Configured);
+  assert(backendConfigFor(BackendBootAction::None) == BackendConfig::NotConfigured);
+  assert(backendConfigFor(BackendBootAction::Invalid) == BackendConfig::Invalid);
 }
 
 static SetupFormError form(const char* ssid, const char* password, const char* backend, bool haveNetwork,
@@ -105,9 +135,11 @@ static void testSetupForm() {
   assert(form("Home", "short", "http://dash:8090", false, f) == SetupFormError::Wifi);
   assert(form("123456789012345678901234567890123", "password1", "http://dash:8090", false, f) ==
          SetupFormError::Wifi);
-  // Backend is required and validated; nothing is accepted partially.
-  assert(form("Home", "password1", "", false, f) == SetupFormError::Backend &&
-         f.backendError == BackendUrlError::Empty && !f.changeWifi && f.backend[0] == '\0');
+  // The backend is optional: blank (or spaces) = none. A given one is validated
+  // and nothing is accepted partially.
+  assert(form("Home", "password1", "", false, f) == SetupFormError::None && f.changeWifi && !f.keepBackend &&
+         f.backend[0] == '\0');
+  assert(form("Home", "password1", "   ", false, f) == SetupFormError::None && f.backend[0] == '\0');
   assert(form("Home", "password1", "http://dash:8090/api/status", false, f) == SetupFormError::Backend &&
          f.backendError == BackendUrlError::Path && !f.changeWifi);
   assert(form("Home", "password1", "192.0.2.10", true, f) == SetupFormError::Backend &&
@@ -128,8 +160,7 @@ static void testRestartAndRetry() {
   assert(setupShouldRetry(SetupReason::WifiFailed, true, SETUP_RETRY_IDLE_MS));
   assert(!setupShouldRetry(SetupReason::WifiFailed, false, SETUP_RETRY_IDLE_MS * 2)); // Someone is using it.
   // Missing configuration never retries by itself: restarting cannot fix it.
-  const SetupReason others[] = {SetupReason::NoConfig, SetupReason::NoWifi, SetupReason::NoBackend,
-                                SetupReason::BadBackend};
+  const SetupReason others[] = {SetupReason::NoConfig, SetupReason::NoWifi};
   for (SetupReason r : others) assert(!setupShouldRetry(r, true, SETUP_RETRY_IDLE_MS * 10));
   // Boot connect is bounded: no endless loop on a network that is not there.
   assert(uint32_t(BOOT_CONNECT_ATTEMPTS) * BOOT_ATTEMPT_MS <= 60000);
@@ -261,7 +292,8 @@ static void testSetupLoopDrivesTheSwitch() {
   assert(root != std::string::npos && post != std::string::npos && all != std::string::npos);
   assert(root < all && post < all);
   assert(source.find("server.onNotFound(") == std::string::npos);
-  assert(source.find("<select name=net>") != std::string::npos);
+  // The form (with the scanned list) is rendered by SetupPage.h: test_setup_page.
+  assert(source.find("renderSetupForm(page, view);") != std::string::npos);
   // Scanning: the driver's done event, never the wrapper's 6 s scanComplete()
   // timeout, and a fully initialized scan configuration.
   assert(source.find("WiFi.scanNetworks(") == std::string::npos);
@@ -269,10 +301,10 @@ static void testSetupLoopDrivesTheSwitch() {
   assert(begin.find("memset(&config, 0, sizeof(config));") != std::string::npos);
   assert(begin.find("esp_wifi_scan_start(&config, false)") != std::string::npos);
   assert(source.find("ARDUINO_EVENT_WIFI_SCAN_DONE") != std::string::npos);
-  assert(source.find("name=pass type=password") != std::string::npos);
-  // The password is never written back into the page: its input has no value.
-  std::string form = functionBody(source, "static void sendForm(");
-  assert(form.find("<input name=pass type=password maxlength=63 autocomplete=off>") != std::string::npos);
+  // The password is never written back into the page: its input has no value
+  // (the form is rendered by SetupPage.h; test_setup_page checks the HTML).
+  std::string page = readSource("../include/SetupPage.h");
+  assert(page.find("<input name=pass type=password maxlength=63 autocomplete=off>") != std::string::npos);
 }
 
 // --- Scanned networks ---------------------------------------------------------------
@@ -430,8 +462,9 @@ static void testOpenAndSecuredNetworks() {
 
 // --- What ends up in NVS ----------------------------------------------------------------
 // Models the main-task flow with the firmware's own pure steps: Wi-Fi is
-// written only on wifiSwitchStep().saveCredentials, the backend only when the
-// setup outcome is Apply (WifiProvisioning::applySubmission).
+// written only on wifiSwitchStep().saveCredentials (namespace "wifi"), the
+// backend only when the setup outcome is Apply and it changed (namespace
+// "device"; "" = removed). WifiProvisioning::applySubmission.
 
 struct Nvs {
   char wifi[33];
@@ -444,12 +477,14 @@ struct Outcome {
   bool retryPossible;
 };
 
-// joinAfterMs < 0: the network is never joined (wrong password).
+// backend nullptr: first run, the page has no backend field. joinAfterMs < 0:
+// the network is never joined (wrong password).
 static Outcome submit(Nvs& nvs, bool firstRun, const char* ssid, const char* backend, int joinAfterMs) {
   SetupForm form;
   bool haveNetwork = nvs.wifi[0] != '\0';
   assert(validateSetupForm(ssid, strlen(ssid), 9, backend, haveNetwork, form) == SetupFormError::None);
-  bool backendChanged = strcmp(form.backend, nvs.backend) != 0;
+  assert(form.keepBackend == (backend == nullptr));
+  bool backendChanged = setupBackendChanged(form, nvs.backend);
   WifiSwitchState state = WifiSwitchState::Connecting;
   for (uint32_t t = 0; state == WifiSwitchState::Connecting; t += 250) {
     WifiSwitchStep step = wifiSwitchStep(state, joinAfterMs >= 0 && t >= uint32_t(joinAfterMs), t, true);
@@ -460,7 +495,7 @@ static Outcome submit(Nvs& nvs, bool firstRun, const char* ssid, const char* bac
   Outcome out = {state, false, false};
   switch (setupAfterSwitch(state, firstRun, backendChanged)) {
     case SetupJoinOutcome::Apply:
-      if (backendChanged || !nvs.backend[0]) snprintf(nvs.backend, sizeof(nvs.backend), "%s", form.backend);
+      if (backendChanged) snprintf(nvs.backend, sizeof(nvs.backend), "%s", form.backend);
       out.restart = setupNeedsRestart(firstRun, backendChanged);
       break;
     case SetupJoinOutcome::Failed:
@@ -473,33 +508,72 @@ static Outcome submit(Nvs& nvs, bool firstRun, const char* ssid, const char* bac
 }
 
 static void testNvsOutcomes() {
-  // First run, selected network + correct password: join, save both, restart.
+  const char* url = "http://192.0.2.10:8090";
+  // Fresh public device, first run: Wi-Fi only. Joins, saves Wi-Fi, restarts;
+  // no backend is written -> Standalone Mode on the next boot.
   Nvs nvs = {"", ""};
-  Outcome o = submit(nvs, true, "Home", "http://192.0.2.10:8090", 3000);
+  Outcome o = submit(nvs, true, "Home", nullptr, 3000);
   assert(o.state == WifiSwitchState::Connected && o.restart);
-  assert(strcmp(nvs.wifi, "Home") == 0 && strcmp(nvs.backend, "http://192.0.2.10:8090") == 0);
+  assert(strcmp(nvs.wifi, "Home") == 0 && nvs.backend[0] == '\0');
+  assert(boot(true, false, nullptr, nullptr).mode == DeviceMode::Standalone);
 
   // First run, wrong password: timeout, nothing saved, retry, then success.
   nvs = Nvs{"", ""};
-  o = submit(nvs, true, "Home", "http://192.0.2.10:8090", -1);
+  o = submit(nvs, true, "Home", nullptr, -1);
   assert(o.state == WifiSwitchState::Failed && !o.restart && o.retryPossible);
   assert(nvs.wifi[0] == '\0' && nvs.backend[0] == '\0');
-  o = submit(nvs, true, "Home", "http://192.0.2.10:8090", 2000);
+  o = submit(nvs, true, "Home", nullptr, 2000);
   assert(o.restart && strcmp(nvs.wifi, "Home") == 0);
 
+  // No Wi-Fi but a backend stored (boot case 2): first run keeps the backend.
+  nvs = Nvs{"", ""};
+  snprintf(nvs.backend, sizeof(nvs.backend), "%s", url);
+  o = submit(nvs, true, "Home", nullptr, 1000);
+  assert(o.restart && strcmp(nvs.wifi, "Home") == 0 && strcmp(nvs.backend, url) == 0);
+  assert(boot(true, false, nvs.backend, nullptr).mode == DeviceMode::Full);
+
   // Existing device (Settings): a failed change keeps the old network and server.
-  nvs = Nvs{"Home", "http://192.0.2.10:8090"};
-  o = submit(nvs, false, "Home", "http://192.0.2.10:8090", -1);       // Same SSID, wrong password.
+  nvs = Nvs{"Home", ""};
+  snprintf(nvs.backend, sizeof(nvs.backend), "%s", url);
+  o = submit(nvs, false, "Home", url, -1);                            // Same SSID, wrong password.
   assert(o.state == WifiSwitchState::Failed && o.retryPossible);
-  assert(strcmp(nvs.wifi, "Home") == 0 && strcmp(nvs.backend, "http://192.0.2.10:8090") == 0);
+  assert(strcmp(nvs.wifi, "Home") == 0 && strcmp(nvs.backend, url) == 0);
   o = submit(nvs, false, "Office", "http://192.0.2.99:8090", -1);     // New SSID and server: neither saved.
-  assert(strcmp(nvs.wifi, "Home") == 0 && strcmp(nvs.backend, "http://192.0.2.10:8090") == 0);
-  // The retry with the right password: Wi-Fi-only change, no restart.
-  o = submit(nvs, false, "Home", "http://192.0.2.10:8090", 1000);
-  assert(o.state == WifiSwitchState::Connected && !o.restart && strcmp(nvs.wifi, "Home") == 0);
-  // A server change that joins: saved, restart.
-  o = submit(nvs, false, "Home", "http://192.0.2.20:8090", 1000);
-  assert(o.restart && strcmp(nvs.backend, "http://192.0.2.20:8090") == 0);
+  assert(strcmp(nvs.wifi, "Home") == 0 && strcmp(nvs.backend, url) == 0);
+  // Wi-Fi changed (backend field left as pre-filled): backend preserved, no restart.
+  o = submit(nvs, false, "Office", url, 1000);
+  assert(o.state == WifiSwitchState::Connected && !o.restart);
+  assert(strcmp(nvs.wifi, "Office") == 0 && strcmp(nvs.backend, url) == 0);
+  // Backend changed: saved, restart; Wi-Fi preserved.
+  o = submit(nvs, false, "Office", "http://192.0.2.20:8090", 1000);
+  assert(o.restart && strcmp(nvs.backend, "http://192.0.2.20:8090") == 0 && strcmp(nvs.wifi, "Office") == 0);
+  // Backend cleared (blank field): removed, restart into Standalone; Wi-Fi preserved.
+  o = submit(nvs, false, "Office", "", 1000);
+  assert(o.restart && nvs.backend[0] == '\0' && strcmp(nvs.wifi, "Office") == 0);
+  assert(boot(true, false, nvs.backend, url).mode == DeviceMode::Standalone); // Even a dev build.
+  // Later: a backend is added from Settings -> Full Mode.
+  o = submit(nvs, false, "Office", url, 1000);
+  assert(o.restart && boot(true, false, nvs.backend, nullptr).mode == DeviceMode::Full);
+}
+
+// The first-run form has no backend field; a kept backend is never a change.
+static void testWifiOnlyFirstRun() {
+  SetupForm f;
+  assert(validateSetupForm("Home", 4, 9, nullptr, false, f) == SetupFormError::None);
+  assert(f.changeWifi && f.keepBackend && f.backend[0] == '\0' && f.backendError == BackendUrlError::None);
+  assert(!setupBackendChanged(f, ""));
+  assert(!setupBackendChanged(f, "http://192.0.2.10:8090"));
+  // Wi-Fi rules are unchanged.
+  assert(validateSetupForm("", 0, 0, nullptr, false, f) == SetupFormError::NeedNetwork);
+  assert(validateSetupForm("Home", 4, 0, nullptr, false, f, true) == SetupFormError::NeedPassword);
+  assert(validateSetupForm("Home", 4, 5, nullptr, false, f) == SetupFormError::Wifi);
+  // From Settings: blank removes, a value replaces, the same value is no change.
+  assert(validateSetupForm("", 0, 0, "", true, f) == SetupFormError::None && !f.keepBackend);
+  assert(setupBackendChanged(f, "http://192.0.2.10:8090") && !setupBackendChanged(f, ""));
+  assert(validateSetupForm("", 0, 0, "http://192.0.2.10:8090/", true, f) == SetupFormError::None);
+  assert(!setupBackendChanged(f, "http://192.0.2.10:8090") && setupBackendChanged(f, ""));
+  // A first-run submission always restarts (into the dashboard).
+  assert(setupNeedsRestart(true, setupBackendChanged(f, "")));
 }
 
 int main() {
@@ -509,6 +583,7 @@ int main() {
   testSsidChoice();
   testOpenAndSecuredNetworks();
   testNvsOutcomes();
+  testWifiOnlyFirstRun();
   testWifiSwitch();
   testSetupAfterSwitch();
   testFlowModel();

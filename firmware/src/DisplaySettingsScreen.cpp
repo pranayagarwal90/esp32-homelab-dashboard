@@ -1,6 +1,7 @@
 #include <Arduino.h>
 #include "DisplaySettingsScreen.h"
 #include "BacklightPwm.h"
+#include "DeviceConfig.h"
 #include "Display.h"
 #include "PhotoScreen.h"
 #include "UiHelpers.h"
@@ -184,7 +185,8 @@ void drawWallpaperSettings() {
   if (!ready) {
     tft.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
     tft.setCursor(20, WALL_Y0 + WALL_PITCH + 10);
-    tft.print("Loading photo list from HomeServer...");
+    tft.print(backendConfigured() ? "Loading photo list from HomeServer..."
+                                  : backendNotice(BackendFeature::Photos).hint);
   }
   bool paged = wallpaperPages() > 1;
   drawBackBar(paged ? "< PREV" : nullptr, "BACK", paged ? "NEXT >" : nullptr);

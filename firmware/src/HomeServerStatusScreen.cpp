@@ -4,6 +4,7 @@
 #include "AlertLogic.h"
 #include "AiAssistantScreen.h"
 #include "AlertsScreen.h"
+#include "DeviceConfig.h"
 #include "Display.h"
 #include "PageRouter.h"
 #include "UiHelpers.h"
@@ -83,6 +84,11 @@ void drawHomeServerPage() {
   app.currentPage = PAGE_HOMESERVER;
   tft.fillScreen(TFT_BLACK);
   drawHeader("HOMESERVER STATUS");
+  if (!backendConfigured()) {
+    drawBackendNotice(BackendFeature::ServerStats, 80);
+    drawBackBar(nullptr, "BACK", nullptr);
+    return;
+  }
 
   drawCompactMetric("CPU", metrics.cpuPercent, 14, 45, 138);
   drawCompactMetric("RAM", metrics.memPercent, 168, 45, 138);
@@ -156,7 +162,7 @@ void drawHomeServerPage() {
 }
 
 void handleHomeServerTouch(int x, int y) {
-  if (aiAskBarHit(x, y)) openAiResult(AiMode::Attention, PAGE_HOMESERVER);
+  if (backendConfigured() && aiAskBarHit(x, y)) openAiResult(AiMode::Attention, PAGE_HOMESERVER);
   else if (y >= NAV_Y) showPage(appBackTarget(PAGE_HOMESERVER, PAGE_MORE));
   else if (alertBadgeHit(x, y)) openAlerts(PAGE_HOMESERVER);
 }

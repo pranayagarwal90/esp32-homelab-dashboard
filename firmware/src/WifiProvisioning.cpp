@@ -11,6 +11,7 @@
 #include "NetworkManager.h"
 #include "PowerManager.h"
 #include "ProvisioningLogic.h"
+#include "SetupPage.h"
 
 static constexpr uint32_t SETUP_IDLE_TIMEOUT_MS = 10UL * 60UL * 1000UL;
 static constexpr uint32_t CLOSE_AFTER_SUCCESS_MS = 20000;
@@ -22,7 +23,8 @@ static constexpr uint32_t SETUP_STACK_BYTES = 6144;
 struct SetupSubmission {
   WifiCredentials wifi;
   bool changeWifi;                 // False: keep the current network.
-  char backend[BACKEND_URL_MAX];   // Normalized.
+  bool keepBackend;                // First run: no backend field; keep what is stored.
+  char backend[BACKEND_URL_MAX];   // Normalized; "" = no backend.
 };
 
 // --- Shared between the main task and the setup task --------------------------------
@@ -110,9 +112,9 @@ static const char PAGE_HEAD[] PROGMEM =
 
 static const char* serverCheckText() {
   switch (serverCheck) {
-    case ServerCheck::Reachable: return " The dashboard server answered.";
+    case ServerCheck::Reachable: return " The HomeDeck Backend answered.";
     case ServerCheck::NotReachable:
-      return " The dashboard server did not answer; it is saved anyway (check it in Settings).";
+      return " The HomeDeck Backend did not answer; it is saved anyway (check it in Settings).";
     case ServerCheck::NotChecked: break;
   }
   return "";
@@ -231,7 +233,8 @@ static void serviceScan() {
 
 // The form; error, ssid and backend re-fill it after a rejected or failed
 // submission (the password is never echoed). A listed ssid is pre-selected in
-// the dropdown, any other one is put in the typed field.
+// the dropdown, any other one is put in the typed field. First run asks for
+// Wi-Fi only; from Settings the optional HomeDeck Backend field is shown too.
 static void sendForm(int code, const char* error, const char* ssid, const char* backend) {
   String page = FPSTR(PAGE_HEAD);
   appendStatus(page);
@@ -240,37 +243,17 @@ static void sendForm(int code, const char* error, const char* ssid, const char* 
     page += htmlEscape(error);
     page += "</b></p>";
   }
-  int listed = findScannedNetwork(networks, networkCount, ssid, strlen(ssid));
-  page += "<form method=post action=/save><label>Wi-Fi network<select name=net><option value=\"\">";
-  page += networkCount ? (haveNetwork ? "Keep the current network" : "Choose a network")
-          : scanBusy(scan) ? "Scanning... use Refresh networks"
-          : scanFailed ? "Scan failed: Refresh, or type a name below" : "No networks found: type one below";
-  page += "</option>";
-  for (int i = 0; i < networkCount; i++) {
-    page += "<option value=\"";
-    page += htmlEscape(networks[i].ssid);
-    page += i == listed ? "\" selected>" : "\">";
-    page += htmlEscape(networks[i].ssid);
-    page += " - ";
-    page += signalLabel(networks[i].rssi);
-    page += networks[i].open ? ", open" : "";
-    page += "</option>";
-  }
-  page += "</select></label><label>Or type a network name (hidden or not listed)"
-          "<input name=ssid maxlength=32 autocomplete=off autocapitalize=off autocorrect=off "
-          "spellcheck=false value=\"";
-  page += listed < 0 ? htmlEscape(ssid) : String();
-  page += "\"></label><label>Wi-Fi password (blank for an open network)"
-          "<input name=pass type=password maxlength=63 autocomplete=off></label>"
-          "<label>Dashboard Server<input name=server required maxlength=127 inputmode=url "
-          "autocapitalize=off autocorrect=off spellcheck=false placeholder=\"http://192.168.1.50:8090\" value=\"";
-  page += htmlEscape(backend);
-  page += "\"></label><small>Enter the address of your dashboard server, "
-          "for example http://192.168.1.50:8090 (no /api/status).</small>"
-          "<button>Save and connect</button></form><p>";
-  page += scanBusy(scan) ? "Scanning for networks... <a href=/>reload</a> in a few seconds."
-                      : "<a href=/?rescan=1>Refresh networks</a>";
-  page += "</p></body></html>";
+  SetupFormView view;
+  view.firstRun = firstRunMode;
+  view.haveNetwork = haveNetwork;
+  view.networks = networks;
+  view.networkCount = networkCount;
+  view.scanning = scanBusy(scan);
+  view.scanFailed = scanFailed;
+  view.ssid = ssid;
+  view.backend = backend;
+  renderSetupForm(page, view); // SetupPage.h: no backend field on first run.
+  page += "</body></html>";
   server.send(code, "text/html", page);
 }
 
@@ -297,17 +280,21 @@ static void handleSave() {
   String typed = server.arg("ssid");
   String selected = server.arg("net");
   String pass = server.arg("pass");
+  // First run has no backend field: whatever is stored is kept (nullptr);
+  // so does a Settings request without the field (SetupPage.h).
   String backend = server.arg("server");
+  const char* backendField = setupBackendArg(firstRunMode, server.hasArg("server"), backend.c_str());
   size_t ssidLength = 0;
   const char* ssid = chooseSetupSsid(typed.c_str(), typed.length(), selected.c_str(), selected.length(),
                                      ssidLength);
   int listed = findScannedNetwork(networks, networkCount, ssid, ssidLength);
   // Never the password, only whether one was given.
-  Serial.printf("[SETUP] POST /save: network \"%.*s\" (%s), password %s, server \"%s\"\n", int(ssidLength),
+  Serial.printf("[SETUP] POST /save: network \"%.*s\" (%s), password %s, backend %s%s%s\n", int(ssidLength),
                 ssid, typed.length() ? "typed" : ssidLength ? "from the list" : "keep current",
-                pass.length() ? "given" : "blank", backend.c_str());
+                pass.length() ? "given" : "blank", backendField ? "\"" : "",
+                backendField ? backendField : "not asked (kept)", backendField ? "\"" : "");
   SetupForm form;
-  SetupFormError error = validateSetupForm(ssid, ssidLength, pass.length(), backend.c_str(), haveNetwork, form,
+  SetupFormError error = validateSetupForm(ssid, ssidLength, pass.length(), backendField, haveNetwork, form,
                                            listed >= 0 && !networks[listed].open);
   Serial.printf("[SETUP] Validation: %s\n", error == SetupFormError::None ? "OK"
                 : setupFormErrorText(error, form.backendError));
@@ -320,6 +307,7 @@ static void handleSave() {
   SetupSubmission submission;
   memset(&submission, 0, sizeof(submission));
   submission.changeWifi = form.changeWifi;
+  submission.keepBackend = form.keepBackend;
   if (form.changeWifi) {
     memcpy(submission.wifi.ssid, ssid, ssidLength);
     memcpy(submission.wifi.password, pass.c_str(), pass.length());
@@ -337,7 +325,7 @@ static void handleSave() {
             "may drop briefly while the display tries the network. Reconnect to it and "
             "<a href=/>reload</a> to see the status.</p></body></html>";
   } else {
-    page += "<p>Saving. Watch the dashboard screen; it restarts if the dashboard server "
+    page += "<p>Saving. Watch the dashboard screen; it restarts if the HomeDeck Backend "
             "changed. <a href=/>Reload</a> to see the status.</p></body></html>";
   }
   server.send(200, "text/html", page);
@@ -430,29 +418,34 @@ static bool serverAnswers(const char* base) {
   return code == HTTP_CODE_OK;
 }
 
-// The network is in place (joined, or kept): save the backend and restart,
-// or report that nothing changed.
+// The network is in place (joined, or kept): save the backend (an address,
+// or "" to remove it) and restart, or report that nothing changed. Only
+// device/backend is written here; Wi-Fi was saved by the switch itself.
 static void applySubmission() {
   if (!setupNeedsRestart(firstRunMode, pendingBackendChanged)) {
     Serial.println("[SETUP] Nothing changed; no restart");
     setPhase(WifiSetupPhase::NoChange);
     return;
   }
-  if (pendingBackendChanged || !hasBackendUrl()) {
-    if (!saveBackendUrl(pendingBackend)) {
+  if (pendingBackendChanged) {
+    bool saved = pendingBackend[0] ? saveBackendUrl(pendingBackend) : clearBackendUrl();
+    if (!saved) {
       Serial.println("[BACKEND] URL NOT saved (NVS write failed); no restart");
       setPhase(WifiSetupPhase::SaveFailed);
       return;
     }
-    Serial.printf("[BACKEND] URL saved: %s\n", pendingBackend);
+    if (pendingBackend[0]) Serial.printf("[BACKEND] URL saved: %s\n", pendingBackend);
+    else Serial.println("[BACKEND] Removed; Standalone Mode after the restart");
   } else {
-    Serial.println("[BACKEND] URL unchanged");
+    Serial.println("[BACKEND] Unchanged");
   }
-  serverCheck = WiFi.status() != WL_CONNECTED ? ServerCheck::NotChecked
+  serverCheck = !pendingBackend[0] || WiFi.status() != WL_CONNECTED ? ServerCheck::NotChecked
                 : serverAnswers(pendingBackend) ? ServerCheck::Reachable : ServerCheck::NotReachable;
-  if (serverCheck == ServerCheck::NotChecked) Serial.println("[BACKEND] Check skipped: Wi-Fi not connected");
+  if (pendingBackend[0] && serverCheck == ServerCheck::NotChecked) {
+    Serial.println("[BACKEND] Check skipped: Wi-Fi not connected");
+  }
   Serial.printf("[SETUP] Restarting in %lu s (%s)\n", (unsigned long)(RESTART_DELAY_MS / 1000),
-                firstRunMode ? "first run" : "server changed");
+                firstRunMode ? "first run" : "backend changed");
   restartAt = millis();
   setPhase(WifiSetupPhase::Restarting);
 }
@@ -532,10 +525,14 @@ void updateWifiSetup() {
 
   SetupSubmission submission;
   if (current != WifiSetupPhase::Connecting && xQueueReceive(submissions, &submission, 0) == pdTRUE) {
-    memcpy(pendingBackend, submission.backend, sizeof(pendingBackend));
-    pendingBackendChanged = strcmp(pendingBackend, backendUrl()) != 0;
+    // A kept backend (first run) stays exactly as stored, even an invalid one.
+    SetupForm applied;
+    applied.keepBackend = submission.keepBackend;
+    memcpy(applied.backend, submission.backend, sizeof(applied.backend));
+    pendingBackendChanged = setupBackendChanged(applied, backendUrl());
+    snprintf(pendingBackend, sizeof(pendingBackend), "%s", submission.keepBackend ? backendUrl() : submission.backend);
     lastActivity = millis();
-    Serial.printf("[SETUP] Submission: %s; server %s; Wi-Fi mode %s, AP %s, %u client(s)\n",
+    Serial.printf("[SETUP] Submission: %s; backend %s; Wi-Fi mode %s, AP %s, %u client(s)\n",
                   submission.changeWifi ? "join a new network" : "keep the current network",
                   pendingBackendChanged ? "changed" : "unchanged",
                   WiFi.getMode() == WIFI_MODE_APSTA ? "AP+STA" : WiFi.getMode() == WIFI_MODE_AP ? "AP" : "STA",

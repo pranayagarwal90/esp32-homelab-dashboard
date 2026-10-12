@@ -2,6 +2,18 @@
 
 set -euo pipefail
 
+# Usage: ./deploy-esp32.sh             build, sync and OTA-upload a developer build
+#        ./deploy-esp32.sh --sync-only sync sources to the Windows project only:
+#            no build, no upload, and platformio_override.ini is not copied, so
+#            a Windows project without an override builds the public firmware
+#            (for USB tests such as the fresh-device test).
+SYNC_ONLY=false
+case "${1:-}" in
+    "") ;;
+    --sync-only) SYNC_ONLY=true ;;
+    *) echo "Usage: $0 [--sync-only]"; exit 1 ;;
+esac
+
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 FIRMWARE_DIR="$ROOT_DIR/firmware"
@@ -25,7 +37,7 @@ echo
 # Validate required files/directories
 # --------------------------------------------------
 
-if [ ! -x "$PIO" ]; then
+if [ "$SYNC_ONLY" = false ] && [ ! -x "$PIO" ]; then
     echo "ERROR: WSL PlatformIO was not found:"
     echo "  $PIO"
     exit 1
@@ -43,14 +55,14 @@ fi
 
 # The OTA address and developer defaults live in the git-ignored override
 # (see firmware/platformio_override.ini.example); the OTA upload needs it.
-if [ ! -f "$FIRMWARE_DIR/platformio_override.ini" ]; then
+if [ "$SYNC_ONLY" = false ] && [ ! -f "$FIRMWARE_DIR/platformio_override.ini" ]; then
     echo "ERROR: firmware/platformio_override.ini not found (OTA upload_port)."
     exit 1
 fi
 
 # Only developer builds (-D HOMEDECK_DEV_OTA) keep the ArduinoOTA listener;
 # deploying any other build would leave the display reachable by USB only.
-if ! grep -Eq '^[[:space:]]*-D[[:space:]]*HOMEDECK_DEV_OTA' "$FIRMWARE_DIR/platformio_override.ini"; then
+if [ "$SYNC_ONLY" = false ] && ! grep -Eq '^[[:space:]]*-D[[:space:]]*HOMEDECK_DEV_OTA' "$FIRMWARE_DIR/platformio_override.ini"; then
     echo "ERROR: firmware/platformio_override.ini does not enable -D HOMEDECK_DEV_OTA."
     echo "  See firmware/platformio_override.ini.example."
     exit 1
@@ -77,16 +89,18 @@ fi
 # Step 1 - Build authoritative WSL firmware
 # --------------------------------------------------
 
-echo "[1/3] Building firmware in WSL..."
-echo
+if [ "$SYNC_ONLY" = false ]; then
+    echo "[1/3] Building firmware in WSL..."
+    echo
 
-cd "$FIRMWARE_DIR"
+    cd "$FIRMWARE_DIR"
 
-"$PIO" run -e esp32dev-ota
+    "$PIO" run -e esp32dev-ota
 
-echo
-echo "WSL build successful."
-echo
+    echo
+    echo "WSL build successful."
+    echo
+fi
 
 # --------------------------------------------------
 # Step 2 - Sync firmware to Windows deployment project
@@ -100,8 +114,10 @@ mkdir -p "$WINDOWS_INCLUDE"
 
 cp "$FIRMWARE_DIR/platformio.ini" "$WINDOWS_PLATFORMIO"
 echo "  Copied: platformio.ini"
-cp "$FIRMWARE_DIR/platformio_override.ini" "$WINDOWS_PROJECT/platformio_override.ini"
-echo "  Copied: platformio_override.ini"
+if [ "$SYNC_ONLY" = false ]; then
+    cp "$FIRMWARE_DIR/platformio_override.ini" "$WINDOWS_PROJECT/platformio_override.ini"
+    echo "  Copied: platformio_override.ini"
+fi
 
 # src/ is an exact mirror (including subdirectories such as src/games/), so a
 # file removed or renamed here cannot linger and be compiled twice on Windows.
@@ -125,6 +141,16 @@ echo
 echo "Source files in Windows project: $(find "$WINDOWS_SRC" -type f | wc -l)"
 echo "NOTE: secrets.h was intentionally NOT copied."
 echo
+
+if [ "$SYNC_ONLY" = true ]; then
+    if [ -f "$WINDOWS_PROJECT/platformio_override.ini" ]; then
+        echo "Sync only. The Windows project HAS platformio_override.ini: it builds the DEVELOPER firmware."
+    else
+        echo "Sync only. The Windows project has no platformio_override.ini: it builds the PUBLIC firmware."
+    fi
+    echo "Nothing was built or uploaded."
+    exit 0
+fi
 
 # --------------------------------------------------
 # Step 3 - Perform OTA using Windows PlatformIO

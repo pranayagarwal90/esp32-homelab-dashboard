@@ -324,6 +324,8 @@ g++ -std=c++11 -Wall -Wextra -Werror -Ifirmware/include firmware/test/test_weath
 g++ -std=c++11 -Wall -Wextra -Werror -Ifirmware/include firmware/test/test_navigation.cpp -o /tmp/test-navigation
 g++ -std=c++11 -Wall -Wextra -Werror -Ifirmware/include firmware/test/test_backend_url.cpp -o /tmp/test-backend-url && /tmp/test-backend-url
 g++ -std=c++11 -Wall -Wextra -Werror -Ifirmware/include firmware/test/test_provisioning.cpp -o /tmp/test-provisioning && /tmp/test-provisioning
+g++ -std=c++11 -Wall -Wextra -Werror -Ifirmware/include firmware/test/test_standalone.cpp -o /tmp/test-standalone && /tmp/test-standalone
+g++ -std=c++11 -Wall -Wextra -Werror -Ifirmware/include firmware/test/test_setup_page.cpp -o /tmp/test-setup-page && /tmp/test-setup-page
 # Needs ArduinoJson from a previous `pio run` (header-only):
 g++ -std=c++11 -Wall -Wextra -Werror -Ifirmware/include -Ifirmware/.pio/libdeps/esp32dev/ArduinoJson/src firmware/test/test_ai_logic.cpp -o /tmp/test-ai && /tmp/test-ai
 g++ -std=c++11 -Wall -Wextra -Werror -Ifirmware/include -Ifirmware/.pio/libdeps/esp32dev/ArduinoJson/src firmware/test/test_service_status.cpp -o /tmp/test-service-status && /tmp/test-service-status

@@ -48,7 +48,7 @@ void drawSetupPage() {
     drawSetupInstructions(62);
     tft.setTextColor(TFT_DARKGREY, TFT_BLACK);
     tft.setCursor(14, 148);
-    tft.print("3. Enter Wi-Fi and the dashboard server.");
+    tft.print("3. Choose your Wi-Fi and enter its password.");
   }
   drawSetupStatus(STATUS_Y);
   drawnRevision = wifiSetupRevision();

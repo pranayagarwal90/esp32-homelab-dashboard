@@ -62,16 +62,20 @@ void updateWifiSettings() {
   if (millis() - lastRefresh >= REFRESH_MS) drawWifiValues();
 }
 
-// --- Dashboard server ------------------------------------------------------------------
+// --- HomeDeck Backend (optional) ------------------------------------------------------
 
-enum ServerLine { SERVER_ADDRESS, SERVER_STATUS, SERVER_WIFI, SERVER_LINES };
+enum ServerLine { SERVER_STATUS, SERVER_ADDRESS, SERVER_WIFI, SERVER_LINES };
 static bool drawnServerOnline = false;
 static bool drawnWifiConnected = false;
 
+// Set up (none) or CHANGE + REMOVE (one is stored, even an invalid one).
+static bool backendStored() {
+  return backendConfig() != BackendConfig::NotConfigured;
+}
+
 static void drawServerValues() {
   bool connected = WiFi.status() == WL_CONNECTED;
-  drawInfoValue(lineY(SERVER_STATUS), !hasBackendUrl() ? "Not set"
-                : app.serverOnline ? "Responding" : connected ? "Not responding" : "Unknown (no Wi-Fi)");
+  drawInfoValue(lineY(SERVER_STATUS), backendStatusText(backendConfig(), app.serverOnline, connected));
   drawInfoValue(lineY(SERVER_WIFI), connected ? "Connected" : "Disconnected");
   drawnServerOnline = app.serverOnline;
   drawnWifiConnected = connected;
@@ -79,25 +83,28 @@ static void drawServerValues() {
 }
 
 void drawServerSettings() {
-  static const char* labels[SERVER_LINES] = {"Address", "Server", "Wi-Fi"};
-  drawSettingsFrame("DASHBOARD SERVER");
+  static const char* labels[SERVER_LINES] = {"Status", "Address", "Wi-Fi"};
+  drawSettingsFrame("HOMEDECK BACKEND");
   for (int i = 0; i < SERVER_LINES; i++) drawInfoLine(lineY(i), labels[i], "");
   char address[36];
-  formatBackendForDisplay(backendUrl(), address, sizeof(address), 34);
+  if (backendConfigured()) formatBackendForDisplay(backendUrl(), address, sizeof(address), 34);
+  else snprintf(address, sizeof(address), "--");
   drawInfoValue(lineY(SERVER_ADDRESS), address);
   drawServerValues();
   tft.setTextSize(1);
   tft.setTextColor(TFT_DARKGREY, TFT_BLACK);
   tft.setCursor(14, 112);
-  tft.print("Change it from your phone: CHANGE opens the");
+  tft.print(backendStored() ? "Change it from your phone (setup hotspot)," : "Optional: adds services, photos, AI, weather");
   tft.setCursor(14, 124);
-  tft.print("setup hotspot (Wi-Fi and server).");
-  drawMenuButton(15, BUTTON_Y, 140, BUTTON_H, "CHANGE");
+  tft.print(backendStored() ? "or remove it to use HomeDeck on its own." : "and updates. Set up from your phone.");
+  drawMenuButton(15, BUTTON_Y, 140, BUTTON_H, backendStored() ? "CHANGE" : "SET UP");
+  if (backendStored()) drawMenuButton(165, BUTTON_Y, 140, BUTTON_H, "REMOVE");
 }
 
 void handleServerSettingsTouch(int x, int y) {
   if (y < BUTTON_Y || y > BUTTON_Y + BUTTON_H) return;
   if (x >= 15 && x < 155) askConfirm(ConfirmAction::StartWifiSetup, SettingsView::Server);
+  else if (x >= 165 && x < 305 && backendStored()) askConfirm(ConfirmAction::RemoveBackend, SettingsView::Server);
 }
 
 void updateServerSettings() {
@@ -146,9 +153,9 @@ void drawSetupStatus(int statusY) {
     case WifiSetupPhase::Restarting:
       snprintf(line, sizeof(line), "Saved. Restarting...");
       color = TFT_GREEN;
-      second = wifiSetupServerCheck() == ServerCheck::Reachable ? "Dashboard server answered."
+      second = wifiSetupServerCheck() == ServerCheck::Reachable ? "HomeDeck Backend answered."
                : wifiSetupServerCheck() == ServerCheck::NotReachable
-               ? "Dashboard server did not answer (saved anyway)." : "";
+               ? "HomeDeck Backend did not answer (saved anyway)." : "";
       if (wifiSetupServerCheck() == ServerCheck::NotReachable) color = TFT_YELLOW;
       break;
     case WifiSetupPhase::NoChange:

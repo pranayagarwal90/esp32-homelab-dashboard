@@ -1,5 +1,6 @@
 #include "UiHelpers.h"
 #include "AppState.h"
+#include "DeviceConfig.h"
 #include "Display.h"
 #include "UiIcons.h"
 #include "UiTheme.h"
@@ -11,15 +12,34 @@ void drawHeader(const char* title) {
   tft.setCursor(10, 10);
   tft.print(title);
 
-  if (app.serverOnline) {
-    tft.setTextColor(TFT_GREEN, TFT_DARKGREY);
-    tft.setCursor(248, 10);
-    tft.print("LIVE");
-  } else {
-    tft.setTextColor(TFT_RED, TFT_DARKGREY);
-    tft.setCursor(225, 10);
-    tft.print("OFFLINE");
+  switch (backendIndicator(backendConfig(), app.serverOnline)) {
+    case BackendIndicator::Live:
+      tft.setTextColor(TFT_GREEN, TFT_DARKGREY);
+      tft.setCursor(248, 10);
+      tft.print("LIVE");
+      break;
+    case BackendIndicator::Offline:
+      tft.setTextColor(TFT_RED, TFT_DARKGREY);
+      tft.setCursor(225, 10);
+      tft.print("OFFLINE");
+      break;
+    case BackendIndicator::Hidden: // Standalone is not an outage.
+      break;
   }
+}
+
+void drawBackendNotice(BackendFeature feature, int y) {
+  BackendNotice notice = backendNotice(feature);
+  tft.setTextSize(2);
+  tft.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+  tft.setCursor((320 - tft.textWidth(notice.title)) / 2, y);
+  tft.print(notice.title);
+  tft.setTextSize(1);
+  tft.setCursor((320 - tft.textWidth(notice.hint)) / 2, y + 30);
+  tft.print(notice.hint);
+  tft.setTextColor(TFT_DARKGREY, TFT_BLACK);
+  tft.setCursor((320 - tft.textWidth(BACKEND_SETUP_HINT)) / 2, y + 46);
+  tft.print(BACKEND_SETUP_HINT);
 }
 
 void drawTitleBar(const char* title, const char* right) {

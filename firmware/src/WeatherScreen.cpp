@@ -1,6 +1,7 @@
 #include <Arduino.h>
 #include "WeatherScreen.h"
 #include "AppState.h"
+#include "DeviceConfig.h"
 #include "Display.h"
 #include "PageRouter.h"
 #include "UiHelpers.h"
@@ -39,6 +40,15 @@ static void drawCurrent() {
   const WeatherData& w = app.weather;
   tft.fillRect(CURRENT_X, 40, 320 - CURRENT_X, 86, TFT_BLACK);
   char text[24];
+  if (!backendConfigured()) {
+    tft.setTextSize(2);
+    tft.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+    tft.setCursor(CURRENT_X, 60);
+    tft.print("Weather");
+    tft.setCursor(CURRENT_X, 80);
+    tft.print("not set up");
+    return;
+  }
   if (!w.weatherAvailable && w.weatherCode < 0) {
     tft.setTextSize(2);
     tft.setTextColor(TFT_RED, TFT_BLACK);
@@ -167,10 +177,26 @@ static uint32_t textHash() {
   return h;
 }
 
+// Standalone: where weather comes from, in place of details and forecast.
+static void drawWeatherNotice() {
+  tft.fillRect(0, DETAIL_Y, 320, 240 - DETAIL_Y - 35, TFT_BLACK);
+  tft.setTextSize(1);
+  tft.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+  tft.setCursor(12, DETAIL_Y);
+  tft.print(backendNotice(BackendFeature::Weather).hint);
+  tft.setTextColor(TFT_DARKGREY, TFT_BLACK);
+  tft.setCursor(12, DETAIL_Y + 14);
+  tft.print(BACKEND_SETUP_HINT);
+}
+
 static void drawText() {
   drawCurrent();
-  drawDetails();
-  drawHourly();
+  if (backendConfigured()) {
+    drawDetails();
+    drawHourly();
+  } else {
+    drawWeatherNotice();
+  }
   drawnTextHash = textHash();
 }
 

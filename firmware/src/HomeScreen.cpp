@@ -3,6 +3,7 @@
 #include "AlertManager.h"
 #include "AlertsScreen.h"
 #include "AppState.h"
+#include "DeviceConfig.h"
 #include "Display.h"
 #include "HomeLogic.h"
 #include "PageRouter.h"
@@ -38,14 +39,18 @@ static void drawClock() {
   tft.setCursor(12, 8);
   tft.print(date);
 
-  bool live = app.serverOnline;
-  const char* state = live ? "LIVE" : "OFFLINE";
-  tft.setTextSize(1);
-  int w = tft.textWidth(state);
-  tft.fillCircle(304 - w - 8, 15, 3, live ? UiColor::Green : UiColor::Red);
-  tft.setTextColor(live ? UiColor::Green : UiColor::Red, TFT_BLACK);
-  tft.setCursor(308 - w, 12);
-  tft.print(state);
+  // LIVE / OFFLINE only with a backend: Standalone Mode is not an outage.
+  BackendIndicator indicator = backendIndicator(backendConfig(), app.serverOnline);
+  if (indicator != BackendIndicator::Hidden) {
+    bool live = indicator == BackendIndicator::Live;
+    const char* state = live ? "LIVE" : "OFFLINE";
+    tft.setTextSize(1);
+    int w = tft.textWidth(state);
+    tft.fillCircle(304 - w - 8, 15, 3, live ? UiColor::Green : UiColor::Red);
+    tft.setTextColor(live ? UiColor::Green : UiColor::Red, TFT_BLACK);
+    tft.setCursor(308 - w, 12);
+    tft.print(state);
+  }
 
   // "10:42 AM": large digits, small AM/PM.
   char clock[16];
@@ -78,11 +83,11 @@ static void drawWeatherSummary() {
   tft.fillRect(0, HOME_WEATHER_TOP, 320, HOME_WEATHER_BOTTOM - HOME_WEATHER_TOP + 1, TFT_BLACK);
   drawUiIcon(UiIcon::Weather, 12, HOME_WEATHER_TOP + 6, 34, TFT_WHITE, UiColor::Yellow, TFT_BLACK);
   int x = 58;
-  if (!w.weatherAvailable && w.weatherCode < 0) {
+  if (!backendConfigured() || (!w.weatherAvailable && w.weatherCode < 0)) {
     tft.setTextSize(2);
     tft.setTextColor(TFT_DARKGREY, TFT_BLACK);
     tft.setCursor(x, HOME_WEATHER_TOP + 14);
-    tft.print("Weather unavailable");
+    tft.print(backendConfigured() ? "Weather unavailable" : backendNotice(BackendFeature::Weather).title);
     return;
   }
   char text[24];
@@ -141,7 +146,8 @@ static void drawHealth() {
   const AlertTable& table = alerts();
   int critical = alertsCount(table, AlertSeverity::Critical);
   int warnings = alertsCount(table, AlertSeverity::Warning);
-  HomeHealth health = homeHealth(table.haveStatus, critical, warnings);
+  HomeHealth health = backendConfigured() ? homeHealth(table.haveStatus, critical, warnings)
+                      : HomeHealth::Standalone;
   uint16_t color = healthColor(health);
   int top = HOME_HEALTH_TOP + 2, h = HOME_HEALTH_BOTTOM - HOME_HEALTH_TOP - 2;
   tft.fillRect(0, HOME_HEALTH_TOP, 320, HOME_HEALTH_BOTTOM - HOME_HEALTH_TOP + 1, TFT_BLACK);
@@ -152,7 +158,8 @@ static void drawHealth() {
   tft.setCursor(44, top + 5);
   tft.print(homeHealthLabel(health));
   char text[40];
-  formatAlertCounts(table.haveStatus, critical, warnings, text, sizeof(text));
+  if (health == HomeHealth::Standalone) snprintf(text, sizeof(text), "HomeDeck Backend not set up (optional)");
+  else formatAlertCounts(table.haveStatus, critical, warnings, text, sizeof(text));
   tft.setTextSize(1);
   tft.setTextColor(TFT_LIGHTGREY, UiColor::Tile);
   tft.setCursor(44, top + 25);
@@ -176,10 +183,16 @@ static bool metricsCurrent() {
   return app.serverOnline && app.metrics.hostAvailable;
 }
 
+// "CPU 18%   RAM 72%", dashes, or (Standalone) where the stats would come from.
+static void metricsText(char* text, size_t size) {
+  if (!backendConfigured()) snprintf(text, size, "Server: not set up");
+  else formatCpuRam(metricsCurrent(), app.metrics.cpuPercent, app.metrics.memPercent, text, size);
+}
+
 static void drawMetrics() {
   tft.fillRect(0, HOME_METRICS_TOP, 320, HOME_METRICS_BOTTOM - HOME_METRICS_TOP + 1, TFT_BLACK);
   char text[32];
-  formatCpuRam(metricsCurrent(), app.metrics.cpuPercent, app.metrics.memPercent, text, sizeof(text));
+  metricsText(text, sizeof(text));
   tft.setTextSize(2);
   tft.setTextColor(TFT_WHITE, TFT_BLACK);
   tft.setCursor(12, HOME_METRICS_TOP + 8);
@@ -191,7 +204,7 @@ static void drawMetrics() {
 
 static uint32_t metricsHash() {
   char text[32];
-  formatCpuRam(metricsCurrent(), app.metrics.cpuPercent, app.metrics.memPercent, text, sizeof(text));
+  metricsText(text, sizeof(text));
   return fnv(text);
 }
 

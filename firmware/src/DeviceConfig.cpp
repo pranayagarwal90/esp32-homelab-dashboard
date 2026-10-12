@@ -9,48 +9,46 @@ static const char* DEVICE_NAMESPACE = "device";
 static const char* BACKEND_KEY = "backend";
 
 static char backend[BACKEND_URL_MAX] = ""; // Written only by loadDeviceConfig().
-static bool backendStored = false;
+static BackendConfig config = BackendConfig::NotConfigured;
 
 void loadDeviceConfig() {
   char stored[BACKEND_URL_MAX] = "";
+  bool storedPresent = false, storedReadable = true;
   Preferences prefs;
   if (nvsNamespaceExists(DEVICE_NAMESPACE) && prefs.begin(DEVICE_NAMESPACE, true)) {
-    backendStored = prefs.isKey(BACKEND_KEY);
-    // An overlong value reads as "" and is treated as invalid.
-    if (backendStored) prefs.getString(BACKEND_KEY, stored, sizeof(stored));
+    storedPresent = prefs.isKey(BACKEND_KEY);
+    if (storedPresent) {
+      String value = prefs.getString(BACKEND_KEY);
+      storedReadable = value.length() < sizeof(stored); // An overlong value is invalid.
+      if (storedReadable) memcpy(stored, value.c_str(), value.length() + 1);
+    }
     prefs.end();
   }
 
   char resolved[BACKEND_URL_MAX];
-  switch (resolveBootBackend(backendStored, stored, DEV_BACKEND_URL, resolved)) {
-    case BackendBootAction::Use:
-      memcpy(backend, resolved, sizeof(backend));
-      break;
-    case BackendBootAction::Seed:
-      // Developer build upgrading a device that predates device/backend.
-      if (saveBackendUrl(resolved)) {
-        memcpy(backend, resolved, sizeof(backend));
-        backendStored = true;
-        Serial.println("Backend URL seeded from the developer default");
-      }
-      break;
-    case BackendBootAction::Setup:
-      if (backendStored) Serial.println("Stored backend URL is invalid");
-      break;
+  BackendBootAction action = resolveBootBackend(storedPresent, storedReadable ? stored : nullptr,
+                                                DEV_BACKEND_URL, resolved);
+  if (action == BackendBootAction::Seed) {
+    // Developer build on a device whose backend key was never written.
+    if (saveBackendUrl(resolved)) Serial.println("[BACKEND] URL seeded from the developer default");
+    else action = BackendBootAction::None;
   }
-  Serial.printf("Backend: %s\n", backend[0] ? backend : "(not configured)");
+  config = backendConfigFor(action);
+  if (config == BackendConfig::Configured) memcpy(backend, resolved, sizeof(backend));
+  if (config == BackendConfig::Invalid) Serial.println("[BACKEND] Stored URL is not valid; not used");
+  Serial.printf("[BACKEND] %s\n", backend[0] ? backend : "Not configured");
+}
+
+BackendConfig backendConfig() {
+  return config;
+}
+
+bool backendConfigured() {
+  return backendRequestsAllowed(config);
 }
 
 const char* backendUrl() {
   return backend;
-}
-
-bool hasBackendUrl() {
-  return backend[0] != '\0';
-}
-
-bool backendUrlStored() {
-  return backendStored;
 }
 
 bool saveBackendUrl(const char* normalizedUrl) {
@@ -62,17 +60,23 @@ bool saveBackendUrl(const char* normalizedUrl) {
   return ok;
 }
 
-void clearBackendUrl() {
+bool clearBackendUrl() {
   Preferences prefs;
-  if (!prefs.begin(DEVICE_NAMESPACE, false)) return;
-  prefs.remove(BACKEND_KEY);
+  if (!prefs.begin(DEVICE_NAMESPACE, false)) return false;
+  prefs.putString(BACKEND_KEY, ""); // Returns 0 for "" either way: read it back.
+  bool ok = prefs.isKey(BACKEND_KEY) && prefs.getString(BACKEND_KEY).length() == 0;
   prefs.end();
+  return ok;
 }
 
+// Never an endpoint without a configured backend (joinBackendUrl also
+// refuses an empty base).
 bool apiUrl(char* out, size_t size, const char* path) {
-  return joinBackendUrl(out, size, backend, path);
+  if (out && size) out[0] = '\0';
+  return backendConfigured() && joinBackendUrl(out, size, backend, path);
 }
 
 bool photoUrl(char* out, size_t size, const char* fileName) {
-  return joinBackendUrl(out, size, backend, PHOTO_FILE_PATH, fileName);
+  if (out && size) out[0] = '\0';
+  return backendConfigured() && joinBackendUrl(out, size, backend, PHOTO_FILE_PATH, fileName);
 }

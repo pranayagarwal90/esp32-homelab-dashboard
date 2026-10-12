@@ -1,6 +1,7 @@
 #include <Arduino.h>
 #include "TimeWeatherScreen.h"
 #include "AppState.h"
+#include "DeviceConfig.h"
 #include "Display.h"
 #include "PageRouter.h"
 #include "UiHelpers.h"
@@ -38,6 +39,11 @@ static int drawWorldClocks(const WorldClockState& clocks) {
     snprintf(page, sizeof(page), "%d/%d", clocksPage + 1, pages);
     tft.setCursor(312 - tft.textWidth(page), CLOCKS_TITLE_Y);
     tft.print(page);
+  }
+  if (clocks.count == 0 && !backendConfigured()) {
+    printCenteredSmall(backendNotice(BackendFeature::Clocks).hint, CLOCKS_ROW_Y0 + 4, TFT_LIGHTGREY);
+    printCenteredSmall(BACKEND_SETUP_HINT, CLOCKS_ROW_Y0 + 20, TFT_DARKGREY);
+    return pages;
   }
   if (clocks.count == 0) {
     printCenteredSmall("No clocks configured.", CLOCKS_ROW_Y0 + 4, TFT_LIGHTGREY);
@@ -85,9 +91,9 @@ void drawTimePage() {
     tft.printf("High %.1fC   Low %.1fC", weather.highC, weather.lowC);
   } else {
     tft.setTextSize(1);
-    tft.setTextColor(TFT_RED, TFT_BLACK);
+    tft.setTextColor(backendConfigured() ? TFT_RED : TFT_LIGHTGREY, TFT_BLACK);
     tft.setCursor(15, 95);
-    tft.print("Weather unavailable");
+    tft.print(backendConfigured() ? "Weather unavailable" : backendNotice(BackendFeature::Weather).title);
   }
   // The weather block opens the WEATHER page.
   tft.setTextSize(1);

@@ -5,7 +5,8 @@
 // Pure glanceable HOME: health from the Alerts counts, summary text and the
 // tappable areas. HOME never evaluates alerts itself.
 
-enum class HomeHealth : uint8_t { NoData, Healthy, Attention, Critical };
+// Standalone: no HomeDeck Backend, so nothing is monitored (not a problem).
+enum class HomeHealth : uint8_t { NoData, Healthy, Attention, Critical, Standalone };
 
 // Any critical -> CRITICAL; any warning -> ATTENTION; nothing active ->
 // HEALTHY once a status arrived, NO DATA before (an active alert, such as
@@ -21,6 +22,7 @@ inline const char* homeHealthLabel(HomeHealth health) {
     case HomeHealth::Healthy: return "HEALTHY";
     case HomeHealth::Attention: return "ATTENTION";
     case HomeHealth::Critical: return "CRITICAL";
+    case HomeHealth::Standalone: return "STANDALONE";
     default: return "NO DATA";
   }
 }

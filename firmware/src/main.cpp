@@ -46,23 +46,26 @@ void setup() {
   setupTouch();
   setupPhotoDecoder();
 
-  // Boot decision: configuration first (NVS), then the network. Missing or
-  // invalid configuration, or a network that cannot be joined, starts Setup
-  // Mode instead of the dashboard; an unreachable backend never does.
+  // Boot decision: configuration first (NVS), then the network. No Wi-Fi
+  // network, or one that cannot be joined, starts Setup Mode instead of the
+  // dashboard. The backend is optional (BackendMode.h): without one the
+  // dashboard runs in Standalone Mode; an unreachable one stays Full mode.
   loadDeviceConfig();
   initNetwork();
-  SetupReason setupReason = bootSetupReason(hasWifiNetwork(), backendUrlStored(), hasBackendUrl());
+  SetupReason setupReason = bootSetupReason(hasWifiNetwork(), backendConfig());
   if (setupReason == SetupReason::None && !connectWiFi()) setupReason = SetupReason::WifiFailed;
   if (setupReason != SetupReason::None) {
+    Serial.println(deviceModeLog(DeviceMode::Setup, backendConfig()));
     enterSetupMode(setupReason);
     return;
   }
+  Serial.println(deviceModeLog(deviceMode(true, backendConfig()), backendConfig()));
 
   setupOTA(); // Developer builds only (HOMEDECK_DEV_OTA); a no-op otherwise.
   randomSeed(micros());
 
   setupBluetooth();
-  setupStatusWorker();
+  if (backendConfigured()) setupStatusWorker(); // Standalone: no status task at all.
   char installed[UPDATE_VERSION_MAX];
   if (beginFirmwareUpdates(installed, sizeof(installed))) showUpdateSuccess(installed);
   else drawCurrentPage();

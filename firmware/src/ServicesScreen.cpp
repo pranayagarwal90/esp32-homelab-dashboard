@@ -1,6 +1,7 @@
 #include <Arduino.h>
 #include "ServicesScreen.h"
 #include "AppState.h"
+#include "DeviceConfig.h"
 #include "Display.h"
 #include "PageRouter.h"
 #include "ServicesLogic.h"
@@ -72,7 +73,9 @@ void drawServicesPage() {
   else snprintf(title, sizeof(title), "SERVICES");
   drawHeader(title);
 
-  if (!services.received) {
+  if (!backendConfigured()) {
+    drawBackendNotice(BackendFeature::Services, 80);
+  } else if (!services.received) {
     printCenteredLine("Waiting for the first status update.", 96, TFT_LIGHTGREY);
   } else if (services.count == 0) {
     tft.setTextSize(2);

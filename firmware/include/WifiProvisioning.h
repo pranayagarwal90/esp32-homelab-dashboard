@@ -4,14 +4,15 @@
 // Temporary setup hotspot (AP+STA, so the dashboard stays online when it is
 // started from Settings). A phone joins a WPA2 hotspot whose random password
 // is shown only on the display, opens http://192.168.4.1 and submits the
-// Wi-Fi network and the dashboard server (backend URL).
+// Wi-Fi network. First run asks for nothing else; from Settings the page
+// also has the optional HomeDeck Backend address (blank = none).
 //
 // The web server and captive DNS run in their own FreeRTOS task, so slow
 // clients cannot block the main loop. The page validates everything first;
 // a valid submission is passed to the main task through a queue. The main
 // task joins the network via NetworkManager (Wi-Fi is saved only once
-// joined), then saves the backend URL and, on first run or when the backend
-// changed, restarts (the backend URL is fixed for a boot session).
+// joined), then saves the backend URL if it changed and, on first run or when
+// the backend changed, restarts (the backend URL is fixed for a boot session).
 
 enum class WifiSetupPhase : uint8_t {
   Off, Waiting, Connecting, Connected, Failed, Stopping, StartFailed,

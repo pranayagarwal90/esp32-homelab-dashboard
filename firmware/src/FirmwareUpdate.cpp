@@ -308,7 +308,7 @@ static bool networkReady() {
 }
 
 bool requestUpdateCheck() {
-  if (!updateCheckAllowed(setupModeActive(), networkReady(), hasBackendUrl(), firmwareUpdateState())) return false;
+  if (!updateCheckAllowed(setupModeActive(), networkReady(), backendConfigured(), firmwareUpdateState())) return false;
   updateCheckStarted(schedule, millis());
   publish(UpdateState::Checking, UpdateError::None);
   if (startJob(Job::Check)) return true;
@@ -332,7 +332,7 @@ bool requestUpdateInstall() {
 
 void serviceFirmwareUpdates() {
   if (!updateCheckDue(schedule, millis())) return;
-  if (!updateCheckAllowed(setupModeActive(), networkReady(), hasBackendUrl(), firmwareUpdateState())) return;
+  if (!updateCheckAllowed(setupModeActive(), networkReady(), backendConfigured(), firmwareUpdateState())) return;
   requestUpdateCheck();
 }
 

@@ -2,6 +2,7 @@
 #include "AiAssistantScreen.h"
 #include "AiClient.h"
 #include "AlertManager.h"
+#include "DeviceConfig.h"
 #include "Display.h"
 #include "MenuLayout.h"
 #include "PageRouter.h"
@@ -99,6 +100,11 @@ void drawAiMenuPage() {
   app.currentPage = PAGE_AI;
   tft.fillScreen(TFT_BLACK);
   drawTitleBar("AI ASSISTANT");
+  if (!backendConfigured()) { // Nothing to ask, and no availability check.
+    drawBackendNotice(BackendFeature::Ai, 80);
+    drawBackBar(nullptr, "BACK", nullptr);
+    return;
+  }
   drawAvailability();
   for (int row = 0; row < AI_MODE_COUNT; row++) drawMenuRow(row);
   drawBackBar(nullptr, "BACK", nullptr);
@@ -124,7 +130,7 @@ void handleAiMenuTouch(int x, int y) {
     showPage(appBackTarget(PAGE_AI, PAGE_MORE));
     return;
   }
-  int row = aiMenuRowAt(x, y);
+  int row = backendConfigured() ? aiMenuRowAt(x, y) : -1;
   if (row >= 0) openAiResult((AiMode)row, PAGE_AI);
 }
 
@@ -211,6 +217,10 @@ void drawAiResultPage() {
 }
 
 void openAiResult(AiMode mode, Page origin) {
+  if (!backendConfigured()) { // The AI menu explains why.
+    showPage(PAGE_AI);
+    return;
+  }
   if (session.state == AiState::Loading && session.mode == mode && session.origin == origin) {
     showPage(PAGE_AI_RESULT); // Already asking exactly this.
     return;

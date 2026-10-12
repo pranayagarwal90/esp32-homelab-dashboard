@@ -140,7 +140,8 @@ static void drawFirmwareButton(int x, const char* label, bool enabled) {
   tft.print(label);
 }
 
-// The update status line and the CHECK / INSTALL buttons.
+// The update status line and the CHECK / INSTALL buttons. Updates come from
+// the HomeDeck Backend: without one, CHECK is off and nothing is requested.
 static void drawUpdateStatus() {
   UpdateStatus s;
   firmwareUpdateStatus(s);
@@ -150,12 +151,16 @@ static void drawUpdateStatus() {
   uint16_t color = s.state == UpdateState::Available ? TFT_CYAN
                    : s.state == UpdateState::CheckFailed || s.state == UpdateState::Failed ? TFT_ORANGE
                    : TFT_WHITE;
+  if (!backendConfigured()) {
+    snprintf(text, sizeof(text), "%s", backendNotice(BackendFeature::Updates).hint);
+    color = TFT_LIGHTGREY;
+  }
   tft.fillRect(14, 68, 306, 10, TFT_BLACK);
   tft.setTextSize(1);
   tft.setTextColor(color, TFT_BLACK);
   tft.setCursor(14, 68);
   tft.print(text);
-  bool busy = updateBusy(s.state);
+  bool busy = updateBusy(s.state) || !backendConfigured();
   drawFirmwareButton(FW_CHECK_X, s.state == UpdateState::Checking ? "CHECKING" : "CHECK", !busy);
   drawFirmwareButton(FW_INSTALL_X, "INSTALL", s.hasOffer && !busy);
 }
@@ -241,7 +246,8 @@ static void drawDeviceInfo() {
   drawInfoValue(infoY(INFO_HOSTNAME), deviceIdentity().hostname);
   snprintf(text, sizeof(text), "%s (%s)", firmwareVersion(), firmwareGitSha());
   drawInfoValue(infoY(INFO_FIRMWARE), text);
-  formatBackendForDisplay(backendUrl(), text, sizeof(text), 34);
+  if (backendConfigured()) formatBackendForDisplay(backendUrl(), text, sizeof(text), 34);
+  else snprintf(text, sizeof(text), "%s", backendStatusText(backendConfig(), false, false));
   drawInfoValue(infoY(INFO_BACKEND), text);
   snprintf(text, sizeof(text), "%s rev %u, %u MHz, %u MB", ESP.getChipModel(), unsigned(ESP.getChipRevision()),
            unsigned(ESP.getCpuFreqMHz()), unsigned(ESP.getFlashChipSize() / (1024 * 1024)));
@@ -342,6 +348,17 @@ static void runConfirmed(ConfirmAction action) {
     case ConfirmAction::StartWifiSetup:
       startWifiSetup();
       showSettingsView(SettingsView::WifiSetup); // Shows a failure message if it did not start.
+      break;
+    case ConfirmAction::RemoveBackend:
+      // Only device/backend changes; Wi-Fi stays saved and connected. The
+      // backend is fixed per boot, so the restart starts Standalone Mode.
+      if (clearBackendUrl()) {
+        Serial.println("[BACKEND] Removed; restarting in Standalone Mode");
+        restartDevice();
+      } else {
+        Serial.println("[BACKEND] Could not remove (NVS write failed)");
+        showSettingsView(SettingsView::Server);
+      }
       break;
     case ConfirmAction::ForgetWifi: {
       WifiCredentials builtIn;

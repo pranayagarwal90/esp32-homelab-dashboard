@@ -1,32 +1,29 @@
 #pragma once
 #include <stddef.h>
 #include <stdint.h>
+#include "BackendMode.h"
 #include "BackendUrl.h"
 #include "SettingsLogic.h"
 
 // First-run provisioning decisions. Pure, host-tested.
 //
 // Boot: the device needs a Wi-Fi network (saved in NVS, or a developer
-// build's built-in one) and a valid backend URL (NVS device/backend). If
-// either is missing, or the network cannot be joined, it starts Setup Mode
-// (the setup hotspot) instead of the dashboard. Whether the backend answers
-// is never a reason for setup: that depends on configuration only.
+// build's built-in one). If there is none, or it cannot be joined, it starts
+// Setup Mode (the setup hotspot) instead of the dashboard. The backend URL
+// (NVS device/backend) is optional and never a reason for setup: without one
+// the dashboard runs in Standalone Mode (BackendMode.h).
 
 enum class SetupReason : uint8_t {
-  None,         // Normal dashboard.
+  None,         // Normal dashboard (Standalone or Full).
   NoConfig,     // Fresh device: no network and no backend.
-  NoWifi,       // Backend set, no network.
-  NoBackend,    // Network set (e.g. older firmware), no backend.
-  BadBackend,   // The stored backend URL is not valid.
-  WifiFailed    // Configured, but the network could not be joined at boot.
+  NoWifi,       // Backend set (kept), no network.
+  WifiFailed    // A network is saved, but it could not be joined at boot.
 };
 
 inline const char* setupReasonText(SetupReason reason) {
   switch (reason) {
     case SetupReason::NoConfig: return "This display is not set up yet.";
     case SetupReason::NoWifi: return "No Wi-Fi network is saved.";
-    case SetupReason::NoBackend: return "The dashboard server is not set.";
-    case SetupReason::BadBackend: return "The saved dashboard server is not valid.";
     case SetupReason::WifiFailed: return "Could not connect to Wi-Fi.";
     case SetupReason::None: break;
   }
@@ -34,19 +31,34 @@ inline const char* setupReasonText(SetupReason reason) {
 }
 
 // Stored backend URL at boot: use it, seed it once from a developer build's
-// fallback (only when nothing is stored), or require setup. A stored but
-// invalid value is never overwritten automatically.
-enum class BackendBootAction : uint8_t { Use, Seed, Setup };
+// fallback (only when the key has never been written), or run without one.
+// An empty stored value means "removed in Settings": it is never re-seeded,
+// so a developer build honours the removal too. A stored but invalid value is
+// never used and never overwritten automatically.
+enum class BackendBootAction : uint8_t { Use, Seed, None, Invalid };
 
-inline BackendBootAction backendBootAction(bool storedPresent, bool storedValid, bool fallbackValid) {
+inline BackendBootAction backendBootAction(bool storedPresent, bool storedEmpty, bool storedValid,
+                                           bool fallbackValid) {
   if (storedPresent && storedValid) return BackendBootAction::Use;
-  if (!storedPresent && fallbackValid) return BackendBootAction::Seed;
-  return BackendBootAction::Setup;
+  if (storedPresent) return storedEmpty ? BackendBootAction::None : BackendBootAction::Invalid;
+  return fallbackValid ? BackendBootAction::Seed : BackendBootAction::None;
+}
+
+inline BackendConfig backendConfigFor(BackendBootAction action) {
+  switch (action) {
+    case BackendBootAction::Use:
+    case BackendBootAction::Seed: return BackendConfig::Configured;
+    case BackendBootAction::Invalid: return BackendConfig::Invalid;
+    case BackendBootAction::None: break;
+  }
+  return BackendConfig::NotConfigured;
 }
 
 // The backend URL for this boot from what NVS held (storedPresent/stored) and
 // a developer fallback (nullptr in public builds). out receives the URL to use
-// ("" for Setup); a Seed result must also be written to NVS by the caller.
+// ("" for None/Invalid); a Seed result must also be written to NVS by the
+// caller. A stored value that could not be read (overlong) is passed as
+// nullptr and counts as invalid.
 inline BackendBootAction resolveBootBackend(bool storedPresent, const char* stored, const char* fallback,
                                             char (&out)[BACKEND_URL_MAX]) {
   char normalizedStored[BACKEND_URL_MAX];
@@ -55,18 +67,18 @@ inline BackendBootAction resolveBootBackend(bool storedPresent, const char* stor
       normalizeBackendUrl(stored, normalizedStored, sizeof(normalizedStored)) == BackendUrlError::None;
   bool fallbackValid = fallback &&
       normalizeBackendUrl(fallback, normalizedFallback, sizeof(normalizedFallback)) == BackendUrlError::None;
-  BackendBootAction action = backendBootAction(storedPresent, storedValid, fallbackValid);
+  bool storedEmpty = storedPresent && stored && stored[0] == '\0';
+  BackendBootAction action = backendBootAction(storedPresent, storedEmpty, storedValid, fallbackValid);
   out[0] = '\0';
   if (action == BackendBootAction::Use) memcpy(out, normalizedStored, sizeof(out));
   if (action == BackendBootAction::Seed) memcpy(out, normalizedFallback, sizeof(out));
   return action;
 }
 
-// Before connecting: is anything missing?
-inline SetupReason bootSetupReason(bool hasNetwork, bool backendPresent, bool backendValid) {
-  if (!hasNetwork) return backendValid ? SetupReason::NoWifi : SetupReason::NoConfig;
-  if (!backendValid) return backendPresent ? SetupReason::BadBackend : SetupReason::NoBackend;
-  return SetupReason::None;
+// Before connecting: is a network missing? The backend only picks the text.
+inline SetupReason bootSetupReason(bool hasNetwork, BackendConfig backend) {
+  if (!setupRequired(hasNetwork)) return SetupReason::None;
+  return backend == BackendConfig::NotConfigured ? SetupReason::NoConfig : SetupReason::NoWifi;
 }
 
 // Boot connect: BOOT_CONNECT_ATTEMPTS attempts of BOOT_ATTEMPT_MS (alternating
@@ -258,14 +270,17 @@ enum class SetupFormError : uint8_t { None, NeedNetwork, PasswordWithoutNetwork,
 
 struct SetupForm {
   bool changeWifi = false;                // False: keep the current network.
+  bool keepBackend = false;               // The form had no backend field.
   BackendUrlError backendError = BackendUrlError::None;
-  char backend[BACKEND_URL_MAX] = "";     // Normalized.
+  char backend[BACKEND_URL_MAX] = "";     // Normalized; "" = no backend.
 };
 
 // Validates everything before anything is saved. Wi-Fi fields may be left
-// blank only when a network already exists (keep it); the backend is always
-// required (the page pre-fills the current one). A blank password joins an
-// open network; securedNetwork (the scan says it is not open) requires one.
+// blank only when a network already exists (keep it). A blank password joins
+// an open network; securedNetwork (the scan says it is not open) requires one.
+// The backend is optional: backend nullptr = the field was not shown (first
+// run: Wi-Fi only) and the stored backend is kept as it is; "" = no backend
+// (Standalone); anything else must be a valid address.
 inline SetupFormError validateSetupForm(const char* ssid, size_t ssidLength, size_t passwordLength,
                                         const char* backend, bool haveNetwork, SetupForm& out,
                                         bool securedNetwork = false) {
@@ -278,7 +293,10 @@ inline SetupFormError validateSetupForm(const char* ssid, size_t ssidLength, siz
   } else if (!validWifiInput(ssid, ssidLength, passwordLength)) {
     return SetupFormError::Wifi;
   }
-  out.backendError = normalizeBackendUrl(backend, out.backend, sizeof(out.backend));
+  out.keepBackend = backend == nullptr;
+  out.backendError = out.keepBackend ? BackendUrlError::None
+                     : normalizeBackendUrl(backend, out.backend, sizeof(out.backend));
+  if (out.backendError == BackendUrlError::Empty) out.backendError = BackendUrlError::None; // Optional.
   if (out.backendError != BackendUrlError::None) {
     out.backend[0] = '\0';
     return SetupFormError::Backend;
@@ -298,6 +316,13 @@ inline const char* setupFormErrorText(SetupFormError error, BackendUrlError back
     case SetupFormError::None: break;
   }
   return "";
+}
+
+// The backend this submission leaves in place, and whether that is a change:
+// a kept backend never changes; otherwise the form's value ("" = none).
+inline bool setupBackendChanged(const SetupForm& form, const char* current) {
+  if (form.keepBackend) return false;
+  return strcmp(form.backend, current ? current : "") != 0;
 }
 
 // After a valid submission is applied: restart (the backend URL is fixed for

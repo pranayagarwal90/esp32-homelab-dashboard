@@ -262,6 +262,13 @@ void setupStatusWorker() {
 }
 
 void fetchHomelabStatus() {
+  // Standalone: no request, no failure, so no OFFLINE state or stale alert.
+  if (!backendConfigured()) {
+    static bool logged = false;
+    if (!logged) Serial.println("[BACKEND] Not configured; skipping status requests");
+    logged = true;
+    return;
+  }
   if (!statusRequests || statusInFlight) return;
   StatusRequest request = {app.time.currentYear, app.time.currentMonth, app.time.currentDay};
   if (xQueueSend(statusRequests, &request, 0) == pdTRUE) {
@@ -339,5 +346,5 @@ void processStatusResult() {
 }
 
 bool statusRefreshDue() {
-  return millis() - lastRefresh >= REFRESH_INTERVAL;
+  return backendConfigured() && millis() - lastRefresh >= REFRESH_INTERVAL;
 }

@@ -2,6 +2,7 @@
 #include "AlertsScreen.h"
 #include "AiAssistantScreen.h"
 #include "AlertManager.h"
+#include "DeviceConfig.h"
 #include "Display.h"
 #include "PageRouter.h"
 #include "UiHelpers.h"
@@ -76,9 +77,11 @@ void drawAlertsPage() {
   else snprintf(title, sizeof(title), "ALERTS");
   // ASK AI takes the place of LIVE / OFFLINE here (stale data is an alert).
   drawTitleBar(title);
-  drawAskAiHeaderButton();
+  if (backendConfigured()) drawAskAiHeaderButton();
 
-  if (count == 0) {
+  if (count == 0 && !backendConfigured()) {
+    drawBackendNotice(BackendFeature::Alerts, 80); // Standalone: nothing is monitored.
+  } else if (count == 0) {
     tft.setTextSize(2);
     tft.setTextColor(table.haveStatus ? TFT_GREEN : TFT_LIGHTGREY, TFT_BLACK);
     printCentered(table.haveStatus ? "No active alerts" : "No status data", 88);
@@ -104,7 +107,7 @@ void drawAlertsPage() {
 }
 
 void handleAlertsTouch(int x, int y) {
-  if (aiAskHeaderHit(x, y)) {
+  if (backendConfigured() && aiAskHeaderHit(x, y)) {
     openAiResult(AiMode::Alerts, PAGE_ALERTS);
     return;
   }
