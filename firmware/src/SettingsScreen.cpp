@@ -22,10 +22,12 @@
 #include "NetworkManager.h"
 #include "WifiProvisioning.h"
 #include "WifiSettingsScreen.h"
+#include "WorldClocksScreen.h"
 
 static SettingsView view = SettingsView::Root;
 static ConfirmAction pendingConfirm = ConfirmAction::None;
 static SettingsView confirmReturn = SettingsView::Root;
+static bool clocksReturnToTime = false; // WORLD CLOCKS opened from the CLOCKS page.
 
 // --- Shared row widgets -----------------------------------------------------------
 
@@ -123,6 +125,7 @@ static void handleListTouch(const SettingsMenu& menu, int x, int y) {
   int row = settingsListRowAt(x, y, menu.count);
   if (row < 0) return;
   const SettingsMenuEntry& entry = menu.entries[row];
+  clocksReturnToTime = false; // Opened from Settings: BACK stays in Settings.
   if (entry.confirm != ConfirmAction::None) askConfirm(entry.confirm, view);
   else if (entry.target == SettingsView::Stopwatch) showPage(PAGE_STOPWATCH); // Utilities stays current.
   else showSettingsView(entry.target);
@@ -366,6 +369,13 @@ static void runConfirmed(ConfirmAction action) {
       startLocationSetup();
       showSettingsView(SettingsView::WifiSetup); // Shows a failure message if it did not start.
       break;
+    case ConfirmAction::StartClockSetup:
+      startWorldClockSetup();
+      showSettingsView(SettingsView::WifiSetup); // Shows a failure message if it did not start.
+      break;
+    case ConfirmAction::RemoveClock:
+      removeSelectedClock(); // Only the world-clock store; returns to WORLD CLOCKS.
+      break;
     case ConfirmAction::RemoveLocation:
       // Only the location namespace: Wi-Fi and backend stay. No restart:
       // the clock and weather follow at once (LocalTime, DirectWeather).
@@ -411,6 +421,11 @@ void openSettingsAt(SettingsView at) {
   showPage(PAGE_SETTINGS);
 }
 
+void openSettingsFromClocks(SettingsView at) {
+  clocksReturnToTime = true;
+  openSettingsAt(at);
+}
+
 void showSettingsView(SettingsView next) {
   view = next;
   if (app.currentPage == PAGE_SETTINGS) drawSettingsPage();
@@ -429,6 +444,10 @@ void drawSettingsPage() {
     case SettingsView::Location: drawLocationSettings(); break;
     case SettingsView::PostalCode: drawPostalCode(); break;
     case SettingsView::PostalResults: drawPostalResults(); break;
+    case SettingsView::WorldClocks: drawWorldClockList(); break;
+    case SettingsView::AddClock: drawAddClock(); break;
+    case SettingsView::CommonCities: drawCommonCities(); break;
+    case SettingsView::ClockDetail: drawClockDetail(); break;
     case SettingsView::Bluetooth: drawBluetoothSettings(); break;
     case SettingsView::Sleeping: drawSleeping(); break;
     case SettingsView::Wallpaper: drawWallpaperSettings(); break;
@@ -448,6 +467,11 @@ void drawSettingsPage() {
 static void goBack() {
   flushSettings();
   if (view == SettingsView::PostalResults) cancelPostalSearch(); // Nothing saved; late results ignored.
+  if (view == SettingsView::WorldClocks && clocksReturnToTime) {
+    clocksReturnToTime = false;
+    showPage(PAGE_TIME);
+    return;
+  }
   showSettingsView(settingsParent(view));
 }
 
@@ -458,6 +482,12 @@ void handleSettingsTouch(int x, int y) {
     case SettingsView::Sleeping: return; // Touches only delay sleep until release.
     case SettingsView::Wallpaper:
       if (handleWallpaperSettingsTouch(x, y)) return;
+      break;
+    case SettingsView::WorldClocks:
+      if (handleWorldClockListTouch(x, y)) return;
+      break;
+    case SettingsView::CommonCities:
+      if (handleCommonCitiesTouch(x, y)) return;
       break;
     default: break;
   }
@@ -479,6 +509,8 @@ void handleSettingsTouch(int x, int y) {
     case SettingsView::Location: handleLocationSettingsTouch(x, y); break;
     case SettingsView::PostalCode: handlePostalCodeTouch(x, y); break;
     case SettingsView::PostalResults: handlePostalResultsTouch(x, y); break;
+    case SettingsView::AddClock: handleAddClockTouch(x, y); break;
+    case SettingsView::ClockDetail: handleClockDetailTouch(x, y); break;
     case SettingsView::Bluetooth: handleBluetoothTouch(x, y); break;
     case SettingsView::Build: handleBuildTouch(x, y); break;
     default: {
@@ -500,6 +532,7 @@ void updateSettings() {
   if (view == SettingsView::Server) updateServerSettings();
   if (view == SettingsView::Location) updateLocationSettings();
   if (view == SettingsView::PostalResults) updatePostalResults();
+  updateWorldClockViews(view);
   if (view == SettingsView::WifiSetup) updateWifiSetupView();
   if (view == SettingsView::Wallpaper) updateWallpaperSettings();
 }

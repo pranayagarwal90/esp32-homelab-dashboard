@@ -12,6 +12,7 @@
 #include "FirmwareUpdate.h"
 #include "HomeScreen.h"
 #include "LocalTime.h"
+#include "LocalClockStore.h"
 #include "LocationStore.h"
 #include "NetworkManager.h"
 #include "OtaManager.h"
@@ -74,6 +75,7 @@ void setup() {
   // dashboard runs in Standalone Mode; an unreachable one stays Full mode.
   loadDeviceConfig();
   loadLocation();
+  loadLocalClocks();
   initNetwork();
   SetupReason setupReason = bootSetupReason(hasWifiNetwork(), backendConfig());
   if (setupReason == SetupReason::None && !connectWiFi()) setupReason = SetupReason::WifiFailed;
@@ -121,6 +123,7 @@ void loop() {
   updateAiAssistant();
   updateSettings();
   if (updateLocalClock()) refreshClockViews();
+  updateTimePage(); // World clocks tick without a device location too.
   serviceDirectWeather();
   processStatusResult();
   updateBacklight();

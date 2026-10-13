@@ -146,11 +146,14 @@ static void testHierarchy() {
   // Four root rows still fit above the bottom navigation.
   assert(menu.count <= SETTINGS_LIST_MAX_ROWS);
 
-  // UTILITIES: Stopwatch (its own page; BACK returns to UTILITIES).
-  assert(settingsMenuFor(SettingsView::Utilities, menu) && menu.count == 1);
+  // UTILITIES: Stopwatch (its own page; BACK returns to UTILITIES) and the
+  // local World Clocks.
+  assert(settingsMenuFor(SettingsView::Utilities, menu) && menu.count == 2);
   assert(strcmp(menu.title, "UTILITIES") == 0);
   assert(tapRow(SettingsView::Utilities, 0).target == SettingsView::Stopwatch);
   assert(tapRow(SettingsView::Utilities, 0).icon == UiIcon::Stopwatch);
+  assert(tapRow(SettingsView::Utilities, 1).target == SettingsView::WorldClocks);
+  assert(tapRow(SettingsView::Utilities, 1).icon == UiIcon::Clocks);
   assert(!settingsMenuFor(SettingsView::Stopwatch, menu));
 
   // List hit-testing: gaps, margins, missing rows and the BACK bar are inert.

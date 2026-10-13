@@ -28,7 +28,11 @@ enum class SettingsView : uint8_t {
   Confirm,
   Sleeping,
   Utilities,
-  Stopwatch   // Not drawn here: opens PAGE_STOPWATCH; BACK returns to Utilities.
+  Stopwatch,  // Not drawn here: opens PAGE_STOPWATCH; BACK returns to Utilities.
+  WorldClocks,   // Local world clocks (also from the CLOCKS page's EDIT / ADD CLOCK).
+  AddClock,      // ADD WORLD CLOCK: COMMON CITIES or SEARCH ON PHONE.
+  CommonCities,  // The built-in city list.
+  ClockDetail    // One clock: its place, offset, time; REMOVE.
 };
 
 constexpr int BACK_BAR_Y = 205; // Same threshold as every other page.
@@ -44,7 +48,8 @@ constexpr int SETTINGS_LIST_PITCH = 41;
 constexpr int SETTINGS_LIST_MAX_ROWS = 4;
 
 enum class ConfirmAction : uint8_t { None, Restart, Sleep, StartWifiSetup, ForgetWifi, ApplyBluetooth,
-                                     RemoveBackend, StartLocationSetup, RemoveLocation };
+                                     RemoveBackend, StartLocationSetup, RemoveLocation, StartClockSetup,
+                                     RemoveClock };
 
 struct SettingsMenuEntry {
   const char* label;
@@ -88,13 +93,14 @@ inline bool settingsMenuFor(SettingsView view, SettingsMenu& out) {
   };
   static const SettingsMenuEntry utilities[] = {
     {"STOPWATCH", SettingsView::Stopwatch, A::None, UiIcon::Stopwatch, UiColor::Orange},
+    {"WORLD CLOCKS", SettingsView::WorldClocks, A::None, UiIcon::Clocks, UiColor::Blue},
   };
   switch (view) {
     case SettingsView::Root: out = {"SETTINGS", root, 4}; return true;
     case SettingsView::System: out = {"SYSTEM", system, 4}; return true;
     case SettingsView::Connectivity: out = {"CONNECTIVITY", connectivity, 4}; return true;
     case SettingsView::DisplayMenu: out = {"DISPLAY", display, 3}; return true;
-    case SettingsView::Utilities: out = {"UTILITIES", utilities, 1}; return true;
+    case SettingsView::Utilities: out = {"UTILITIES", utilities, 2}; return true;
     default: return false;
   }
 }
@@ -126,7 +132,13 @@ inline SettingsView settingsParent(SettingsView view) {
     case SettingsView::Wallpaper:
       return SettingsView::DisplayMenu;
     case SettingsView::Stopwatch:
+    case SettingsView::WorldClocks:   // From the CLOCKS page, BACK returns there instead.
       return SettingsView::Utilities;
+    case SettingsView::AddClock:      // CANCEL
+    case SettingsView::ClockDetail:
+      return SettingsView::WorldClocks;
+    case SettingsView::CommonCities:  // CANCEL
+      return SettingsView::AddClock;
     case SettingsView::PostalCode:      // CANCEL
       return SettingsView::Location;
     case SettingsView::PostalResults:   // BACK: edit the code
@@ -191,6 +203,10 @@ inline ConfirmText confirmText(ConfirmAction action) {
       return {"SEARCH ON PHONE?", "Opens a setup hotspot so you can", "search for your town on your phone.", "START"};
     case ConfirmAction::RemoveLocation:
       return {"REMOVE LOCATION?", "Clock and weather stop using it.", "Wi-Fi and backend stay.", "REMOVE"};
+    case ConfirmAction::StartClockSetup:
+      return {"SEARCH ON PHONE?", "Opens a setup hotspot so you can", "find a city for a world clock.", "START"};
+    case ConfirmAction::RemoveClock:
+      return {"REMOVE CLOCK?", "It is removed from World Clocks.", "Other clocks and settings stay.", "REMOVE"};
     case ConfirmAction::None:
       break;
   }

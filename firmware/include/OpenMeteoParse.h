@@ -237,3 +237,27 @@ inline OpenMeteoResult parseGeocoding(const char* body, size_t length, Location*
   }
   return OpenMeteoResult::Ok;
 }
+
+// --- UTC offset (world clocks) ---------------------------------------------------------------
+
+// The metadata-only forecast response (LocalClockLogic.h clockOffsetUrl):
+// only utc_offset_seconds is used. Missing or not a real offset fails.
+inline OpenMeteoResult parseUtcOffset(const char* body, size_t length, int32_t& out,
+                                      ArduinoJson::Allocator* allocator = nullptr) {
+  using namespace openmeteo;
+  out = 0;
+  ArduinoJson::Allocator* alloc = allocatorOr(allocator);
+  JsonDocument filter(alloc);
+  filter["error"] = true;
+  filter["utc_offset_seconds"] = true;
+  JsonDocument doc(alloc);
+  if (!body || deserializeJson(doc, body, length, DeserializationOption::Filter(filter)) || doc.overflowed()) {
+    return OpenMeteoResult::BadJson;
+  }
+  if (!doc.is<JsonObjectConst>()) return OpenMeteoResult::BadJson;
+  if (apiError(doc)) return OpenMeteoResult::ApiError;
+  JsonVariantConst offset = doc["utc_offset_seconds"];
+  if (!offset.is<int32_t>() || !validUtcOffset(offset.as<int32_t>())) return OpenMeteoResult::MissingFields;
+  out = offset.as<int32_t>();
+  return OpenMeteoResult::Ok;
+}

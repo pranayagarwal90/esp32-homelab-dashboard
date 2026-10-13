@@ -19,7 +19,8 @@ enum class WifiSetupPhase : uint8_t {
   Restarting,  // Configuration saved; the device restarts shortly.
   NoChange,    // Valid submission that changed nothing.
   SaveFailed,  // NVS write failed; nothing applied.
-  LocationSaved // Location page: a place was picked and saved.
+  LocationSaved, // Location page: a place was picked and saved.
+  ClockAdded     // World clock page: a clock was added (stays open for more).
 };
 
 // Result of the quick GET <backend>/api/status after saving.
@@ -37,6 +38,11 @@ bool startWifiSetup(bool firstRun = false);
 // offered there. Needs the device online (AP+STA).
 bool startLocationSetup();
 bool wifiSetupForLocation();
+// Main task. The same hotspot for World Clocks > ADD CLOCK > SEARCH ON PHONE:
+// the page searches for a city and adds it to the world clocks only (never
+// the device location, Wi-Fi or backend). Needs the device online (AP+STA).
+bool startWorldClockSetup();
+bool wifiSetupForWorldClock();
 // Main task. Asynchronous: the hotspot closes once the setup task has exited.
 void stopWifiSetup();
 // Main task, every loop: forwards submissions, tracks the switch, saves,

@@ -114,3 +114,13 @@ void drawMenuButton(int x, int y, int w, int h, const char* label) {
   tft.setCursor(x + (w - textWidth) / 2, y + (h / 2) - 3);
   tft.print(label);
 }
+
+void drawActionButton(int x, int y, int w, int h, const char* label, bool enabled, uint16_t fill) {
+  uint16_t back = enabled ? fill : TFT_BLACK;
+  tft.fillRoundRect(x, y, w, h, 8, back);
+  tft.drawRoundRect(x, y, w, h, 8, enabled ? TFT_LIGHTGREY : TFT_DARKGREY);
+  tft.setTextSize(2);
+  tft.setTextColor(enabled ? TFT_WHITE : TFT_DARKGREY, back);
+  tft.setCursor(x + (w - tft.textWidth(label)) / 2, y + (h - 14) / 2);
+  tft.print(label);
+}

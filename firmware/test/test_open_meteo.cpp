@@ -54,7 +54,7 @@ class CountingAllocator : public ArduinoJson::Allocator {
   }
 };
 
-static size_t forecastPeak = 0, geocodingPeak = 0;
+static size_t forecastPeak = 0, geocodingPeak = 0, offsetPeak = 0;
 
 static void testUrls() {
   char url[OPEN_METEO_URL_MAX];
@@ -314,6 +314,43 @@ static void testWeatherCodes() {
   assert(strcmp(weatherDescription(42), "Unknown") == 0);
 }
 
+// World clocks: the metadata-only response (recorded 2026-10-13 from
+// /v1/forecast?latitude=..&longitude=..&timezone=<zone>, no variables).
+static void testUtcOffset() {
+  const char* kathmandu = "{\"latitude\":27.732864,\"longitude\":85.34831,\"generationtime_ms\":0.0017881393432617188,"
+                          "\"utc_offset_seconds\":20700,\"timezone\":\"Asia/Kathmandu\",\"timezone_abbreviation\":"
+                          "\"GMT+5:45\",\"elevation\":1293.0}";
+  const char* newYork = "{\"latitude\":40.710335,\"longitude\":-73.99308,\"generationtime_ms\":0.0059604644775390625,"
+                        "\"utc_offset_seconds\":-14400,\"timezone\":\"America/New_York\",\"timezone_abbreviation\":"
+                        "\"GMT-4\",\"elevation\":0.0}";
+  int32_t offset = 1;
+  CountingAllocator counter;
+  assert(parseUtcOffset(kathmandu, strlen(kathmandu), offset, &counter) == OpenMeteoResult::Ok && offset == 20700);
+  assert(counter.current == 0);
+  offsetPeak = counter.peak;
+  assert(parseUtcOffset(newYork, strlen(newYork), offset) == OpenMeteoResult::Ok && offset == -14400);
+  const char* kolkata = "{\"utc_offset_seconds\":19800,\"timezone\":\"Asia/Kolkata\"}";
+  assert(parseUtcOffset(kolkata, strlen(kolkata), offset) == OpenMeteoResult::Ok && offset == 19800);
+  // Failures: the caller keeps the last known offset.
+  struct { const char* body; OpenMeteoResult expected; } bad[] = {
+    {"{\"reason\":\"Invalid timezone\",\"error\":true}", OpenMeteoResult::ApiError},   // HTTP 400 body.
+    {"{\"timezone\":\"Asia/Tokyo\"}", OpenMeteoResult::MissingFields},                  // No offset.
+    {"{\"utc_offset_seconds\":\"3600\"}", OpenMeteoResult::MissingFields},              // Not a number.
+    {"{\"utc_offset_seconds\":3601}", OpenMeteoResult::MissingFields},                    // Not a real offset.
+    {"{\"utc_offset_seconds\":54000}", OpenMeteoResult::MissingFields},                   // +15 h.
+    {"{\"utc_offset_seconds\":36.5}", OpenMeteoResult::MissingFields},
+    {"[1,2]", OpenMeteoResult::BadJson},
+    {"{\"utc_offset_seconds\":", OpenMeteoResult::BadJson},                               // Cut short.
+    {"<html>502</html>", OpenMeteoResult::BadJson},
+    {"", OpenMeteoResult::BadJson},
+  };
+  for (const auto& b : bad) {
+    offset = 1;
+    assert(parseUtcOffset(b.body, strlen(b.body), offset) == b.expected && offset == 0);
+  }
+  assert(parseUtcOffset(nullptr, 0, offset) == OpenMeteoResult::BadJson);
+}
+
 int main() {
   testUrls();
   testForecast();
@@ -323,7 +360,8 @@ int main() {
   testSourcePrecedence();
   testSchedule();
   testWeatherCodes();
-  printf("open-meteo tests passed (JSON peak: forecast %u B, geocoding %u B)\n", unsigned(forecastPeak),
-         unsigned(geocodingPeak));
+  testUtcOffset();
+  printf("open-meteo tests passed (JSON peak: forecast %u B, geocoding %u B, utc offset %u B)\n",
+         unsigned(forecastPeak), unsigned(geocodingPeak), unsigned(offsetPeak));
   return 0;
 }

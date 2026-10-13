@@ -8,6 +8,7 @@
 #include "BacklightPwm.h"
 #include "DeviceConfig.h"
 #include "HomeScreen.h"
+#include "LocalClockStore.h"
 #include "LocalTime.h"
 #include "LocationStore.h"
 #include "LocationUiLogic.h"
@@ -35,6 +36,17 @@ static bool weatherOk = false;
 static uint32_t weatherDoneRevision = 0;
 static WeatherReport weatherResult;    // Valid when weatherDone && weatherOk.
 static LocationSearchSnapshot search;  // Guarded by lock.
+// World-clock offsets: the clocks to refresh (indexes into clockTargets,
+// which the main task leaves alone while a batch runs) and their results.
+struct ClockJob {
+  uint8_t target;
+  bool ok;
+  int32_t offset;
+};
+static ClockJob clockJobs[LOCAL_CLOCKS_MAX];
+static int clockJobCount = 0;
+static bool clockPending = false;      // Guarded by lock.
+static bool clockDone = false;         // Worker -> main (guarded by lock).
 static const char* searchLabel = "Search"; // Guarded by lock: log prefix (phone or postal).
 
 // --- Worker ------------------------------------------------------------------------------
@@ -196,11 +208,62 @@ static void runSearch(const char* query, uint32_t generation, const char* label)
   portEXIT_CRITICAL(&lock);
 }
 
+// Main-task copy of the local clocks to refresh (identity, name for logs, and
+// when each was last refreshed); rebuilt when the list changes.
+struct ClockTarget {
+  char name[LOCATION_NAME_MAX];
+  char timezone[LOCATION_TZ_MAX];
+  double latitude;
+  double longitude;
+  bool refreshed;          // This boot.
+  uint32_t refreshedMs;
+};
+static ClockTarget clockTargets[LOCAL_CLOCKS_MAX];
+static int clockTargetCount = 0;
+
+static WorldClockLocation targetPlace(const ClockTarget& t) {
+  WorldClockLocation c;
+  memcpy(c.name, t.name, sizeof(c.name));
+  memcpy(c.timezone, t.timezone, sizeof(c.timezone));
+  c.latitude = t.latitude;
+  c.longitude = t.longitude;
+  return c;
+}
+
+// One small request per clock, one after another (never in parallel).
+static void runClocks() {
+  for (int i = 0; i < clockJobCount; i++) {
+    ClockJob& job = clockJobs[i];
+    WorldClockLocation place = targetPlace(clockTargets[job.target]);
+    job.ok = false;
+    char url[OPEN_METEO_URL_MAX];
+    if (!clockOffsetUrl(url, sizeof(url), place)) {
+      Serial.printf("[WORLD CLOCK] Offset refresh failed: %s (not a valid place)\n", place.name);
+      continue;
+    }
+    char* body = nullptr;
+    size_t length = 0;
+    int status = 0;
+    FetchError error = httpsGet("WORLD CLOCK", url, body, length, status);
+    if (error != FetchError::None) {
+      Serial.printf("[WORLD CLOCK] Offset refresh failed: %s (%s)\n", place.name, fetchErrorText(error));
+    } else {
+      OpenMeteoResult parsed = parseUtcOffset(body, length, job.offset);
+      job.ok = parsed == OpenMeteoResult::Ok;
+      if (!job.ok) Serial.printf("[WORLD CLOCK] Offset refresh failed: %s (%s)\n", place.name, openMeteoResultText(parsed));
+    }
+    free(body);
+  }
+  portENTER_CRITICAL(&lock);
+  clockDone = true;
+  portEXIT_CRITICAL(&lock);
+}
+
 // Runs whatever is pending (a search first: someone is waiting on the page),
 // then exits; started again on the next request.
 static void workerTask(void*) {
   for (;;) {
-    bool doSearch = false, doWeather = false;
+    bool doSearch = false, doWeather = false, doClocks = false;
     char query[LOCATION_QUERY_MAX];
     const char* label = "";
     uint32_t generation = 0, revision = 0;
@@ -217,12 +280,16 @@ static void workerTask(void*) {
       weatherPending = false;
       target = weatherTarget;
       revision = weatherTargetRevision;
+    } else if (clockPending) {
+      doClocks = true;
+      clockPending = false;
     } else {
       workerRunning = false;
     }
     portEXIT_CRITICAL(&lock);
     if (doSearch) runSearch(query, generation, label);
     else if (doWeather) runWeather(target, revision);
+    else if (doClocks) runClocks();
     else break;
   }
   vTaskDelete(nullptr);
@@ -271,6 +338,26 @@ static bool startSearch(const char* text, const char* label) {
 
 bool requestLocationSearch(const char* text) {
   return startSearch(text, "Search");
+}
+
+bool requestClockSearch(const char* text) {
+  return startSearch(text, "World clock search");
+}
+
+ClockAddResult addClockFromSearch(uint32_t generation, int index, char* label, size_t size) {
+  Location chosen;
+  bool found = false;
+  portENTER_CRITICAL(&lock);
+  if (search.state == LocationSearchState::Done && search.generation == generation && index >= 0 &&
+      index < search.count) {
+    chosen = search.results[index];
+    found = true;
+  }
+  portEXIT_CRITICAL(&lock);
+  if (size) label[0] = '\0';
+  if (!found) return ClockAddResult::Stale;
+  formatLocationLabel(chosen, label, size);
+  return addLocalClockPlace(clockFromLocation(chosen)); // The clock list only, never the device location.
 }
 
 bool requestPostalSearch(const char* digits) {
@@ -390,7 +477,109 @@ static void applyReport(const WeatherReport& r) {
   invalidateLocalClock();
 }
 
+// --- World-clock offsets (main task) ------------------------------------------------------------
+
+static ClockOffsetSchedule clockSchedule;
+static bool clockInFlight = false;
+static uint32_t clockTargetsRevision = 0xFFFFFFFFu;
+static WorldClockSource loggedClockSource = WorldClockSource::None;
+static bool clockSourceLogged = false;
+
+// The store changed (added or removed): rebuild the targets, keeping when
+// each known clock was refreshed; a new clock is fetched at once.
+static void rebuildClockTargets() {
+  LocalClockList list;
+  localClocks(list);
+  ClockTarget next[LOCAL_CLOCKS_MAX];
+  bool added = false;
+  for (int i = 0; i < list.count; i++) {
+    const WorldClockLocation& c = list.items[i];
+    ClockTarget& t = next[i];
+    memcpy(t.name, c.name, sizeof(t.name));
+    memcpy(t.timezone, c.timezone, sizeof(t.timezone));
+    t.latitude = c.latitude;
+    t.longitude = c.longitude;
+    t.refreshed = false;
+    t.refreshedMs = 0;
+    for (int j = 0; j < clockTargetCount; j++) {
+      if (sameClockPlace(targetPlace(clockTargets[j]), c)) {
+        t.refreshed = clockTargets[j].refreshed;
+        t.refreshedMs = clockTargets[j].refreshedMs;
+      }
+    }
+    added |= !t.refreshed;
+  }
+  memcpy(clockTargets, next, sizeof(next));
+  clockTargetCount = list.count;
+  if (added) clockBatchReset(clockSchedule);
+}
+
+static void serviceWorldClocks() {
+  WorldClockSource source = worldClockSourceFor(localClockCount(), backendConfigured(), app.time.worldClocks.count);
+  if (!clockSourceLogged || source != loggedClockSource) {
+    clockSourceLogged = true;
+    loggedClockSource = source;
+    Serial.printf("[WORLD CLOCK] Source: %s\n", worldClockSourceName(source));
+  }
+
+  bool done = false;
+  portENTER_CRITICAL(&lock);
+  if (clockDone) {
+    done = true;
+    clockDone = false;
+  }
+  portEXIT_CRITICAL(&lock);
+  if (done && clockInFlight) {
+    clockInFlight = false;
+    bool allOk = true;
+    for (int i = 0; i < clockJobCount; i++) {
+      const ClockJob& job = clockJobs[i];
+      ClockTarget& t = clockTargets[job.target];
+      // A failure keeps the last known offset; a clock removed meanwhile is skipped.
+      if (job.ok && applyLocalClockOffset(targetPlace(t), job.offset)) {
+        t.refreshed = true;
+        t.refreshedMs = millis();
+        char text[16];
+        formatUtcOffset(job.offset, text, sizeof(text));
+        Serial.printf("[WORLD CLOCK] Offset %s: %s\n", t.name, text);
+      } else if (!job.ok) {
+        allOk = false;
+      }
+    }
+    clockBatchFinished(clockSchedule, allOk, millis());
+  }
+  if (clockInFlight) return;
+  if (localClocksRevision() != clockTargetsRevision) {
+    clockTargetsRevision = localClocksRevision();
+    rebuildClockTargets();
+  }
+  if (clockTargetCount == 0 || WiFi.status() != WL_CONNECTED || !hasUtcTime()) return;
+  if (!clockBatchAllowed(clockSchedule, millis())) return;
+  int count = 0;
+  for (int i = 0; i < clockTargetCount; i++) {
+    if (!clockOffsetDue(clockTargets[i].refreshed, clockTargets[i].refreshedMs, millis())) continue;
+    clockJobs[count].target = uint8_t(i);
+    clockJobs[count].ok = false;
+    clockJobs[count].offset = 0;
+    count++;
+  }
+  if (count == 0) return;
+  clockJobCount = count;
+  portENTER_CRITICAL(&lock);
+  clockPending = true;
+  portEXIT_CRITICAL(&lock);
+  if (ensureWorker()) {
+    clockInFlight = true;
+  } else {
+    portENTER_CRITICAL(&lock);
+    clockPending = false;
+    portEXIT_CRITICAL(&lock);
+    clockBatchFinished(clockSchedule, false, millis());
+  }
+}
+
 void serviceDirectWeather() {
+  serviceWorldClocks(); // Independent of the weather source (needs only Wi-Fi and NTP).
   WeatherSource source = weatherSource();
   uint32_t revision = locationRevision();
   if (source != appliedSource || revision != appliedRevision) {

@@ -269,6 +269,11 @@ void drawSetupStatus(int statusY) {
       second = "Hotspot closes automatically.";
       color = TFT_GREEN;
       break;
+    case WifiSetupPhase::ClockAdded:
+      snprintf(line, sizeof(line), "Clock added.");
+      second = "Add another, or tap STOP SETUP.";
+      color = TFT_GREEN;
+      break;
   }
   tft.fillRect(0, statusY, 320, 36, TFT_BLACK);
   tft.setTextSize(1);
@@ -313,6 +318,7 @@ void drawWifiSetup() {
 
 // Where the hotspot view returns: the page that opened it.
 static SettingsView setupReturnView() {
+  if (wifiSetupForWorldClock()) return SettingsView::WorldClocks;
   return wifiSetupForLocation() ? SettingsView::Location : SettingsView::Wifi;
 }
 

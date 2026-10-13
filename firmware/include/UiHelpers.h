@@ -12,6 +12,8 @@ void drawTitleBarValue(const char* right);
 void drawNavigation();
 void drawBackBar(const char* left = nullptr, const char* center = "BACK", const char* right = nullptr);
 void drawMenuButton(int x, int y, int w, int h, const char* label);
+// Large button, text size 2; disabled ones are dark (FIRMWARE / BUILD style).
+void drawActionButton(int x, int y, int w, int h, const char* label, bool enabled, uint16_t fill);
 // A backend feature without a backend: a calm, centred "not configured"
 // title at y, its hint and where to set it up (BackendMode.h).
 void drawBackendNotice(BackendFeature feature, int y);

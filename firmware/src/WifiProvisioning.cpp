@@ -9,6 +9,7 @@
 #include "DeviceConfig.h"
 #include "DeviceIdentity.h"
 #include "DirectWeather.h"
+#include "LocalClockStore.h"
 #include "LocationStore.h"
 #include "NetworkManager.h"
 #include "PowerManager.h"
@@ -58,6 +59,7 @@ static bool restartIssued = false;
 static char pendingBackend[BACKEND_URL_MAX] = "";
 static bool pendingBackendChanged = false;
 static uint32_t shownLocationRevision = 0;
+static uint32_t shownClockRevision = 0;
 
 // --- Setup task only -------------------------------------------------------------------
 
@@ -82,6 +84,10 @@ static bool formFilled = false;
 static LocationSearchSnapshot locationSearch; // Copied per request; static to spare the task stack.
 static char locationSaved[LOCATION_NAME_MAX + 2 * LOCATION_REGION_MAX + 8] = "";
 static char locationError[64] = "";
+// World clock page (WorldClock mode only).
+static char clockAdded[LOCATION_NAME_MAX + 2 * LOCATION_REGION_MAX + 8] = "";
+static char clockError[64] = "";
+static bool clockResultAdded[LOCATION_RESULTS_MAX];
 
 static void setTarget(const char* ssid) {
   portENTER_CRITICAL(&targetLock);
@@ -298,6 +304,31 @@ static void sendLocationPage(int code) {
   sendNoStore(code, "text/html", page);
 }
 
+// World Clocks > ADD CLOCK > SEARCH ON PHONE: search and add (to the world
+// clocks only; the device location is never touched here).
+static void sendWorldClockPage(int code) {
+  locationSearchSnapshot(locationSearch);
+  for (int i = 0; i < locationSearch.count && i < LOCATION_RESULTS_MAX; i++) {
+    clockResultAdded[i] = localClockAdded(clockFromLocation(locationSearch.results[i]));
+  }
+  WorldClockPageView view;
+  view.wifiConnected = WiFi.status() == WL_CONNECTED;
+  view.count = localClockCount();
+  view.added = clockAdded;
+  view.error = clockError;
+  view.state = locationSearch.state;
+  view.searchError = locationSearch.error;
+  view.query = locationSearch.query;
+  view.generation = locationSearch.generation;
+  view.results = locationSearch.results;
+  view.alreadyAdded = clockResultAdded;
+  view.resultCount = locationSearch.count;
+  String page = FPSTR(PAGE_HEAD);
+  renderPortalRoot(page, PortalMode::WorldClock, SetupFormView(), LocationPageView(), view);
+  page += "</body></html>";
+  sendNoStore(code, "text/html", page);
+}
+
 static void redirectHome() {
   server.sendHeader("Location", "/", true);
   sendNoStore(303, "text/plain", "");
@@ -335,9 +366,47 @@ static void handleLocationUse() {
   redirectHome();
 }
 
+static void handleClockSearch() {
+  lastRequestMs = millis();
+  if (portalMode != PortalMode::WorldClock) return redirectHome(); // Also refused by portalRoute.
+  String query = server.arg("q");
+  clockAdded[0] = '\0';
+  clockError[0] = '\0';
+  if (!requestClockSearch(query.c_str())) {
+    snprintf(clockError, sizeof(clockError), "Enter a town or city (2 or more characters).");
+    sendWorldClockPage(400);
+    clockError[0] = '\0';
+    return;
+  }
+  Serial.printf("[WORLD CLOCK] Search: \"%s\"\n", query.c_str());
+  redirectHome();
+}
+
+static void handleClockAdd() {
+  lastRequestMs = millis();
+  if (portalMode != PortalMode::WorldClock) return redirectHome(); // Also refused by portalRoute.
+  uint32_t generation = uint32_t(strtoul(server.arg("g").c_str(), nullptr, 10));
+  int index = server.arg("i").toInt();
+  clockError[0] = '\0';
+  char label[sizeof(clockAdded)];
+  ClockAddResult result = addClockFromSearch(generation, index, label, sizeof(label));
+  if (result == ClockAddResult::Added) {
+    memcpy(clockAdded, label, sizeof(clockAdded));
+  } else {
+    clockAdded[0] = '\0';
+    snprintf(clockError, sizeof(clockError), "%s", clockAddResultText(result));
+  }
+  redirectHome();
+}
+
 static void handleRoot() {
   lastRequestMs = millis();
   Serial.printf("[SETUP] %s %s -> %s page\n", methodName(), server.uri().c_str(), portalModeName(portalMode));
+  if (portalMode == PortalMode::WorldClock) {
+    sendWorldClockPage(200);
+    clockError[0] = '\0';
+    return;
+  }
   if (portalMode == PortalMode::Location) {
     sendLocationPage(200);
     locationError[0] = '\0';
@@ -434,12 +503,15 @@ public:
       pageStateReset = false;
       formFilled = false;
       locationSaved[0] = locationError[0] = '\0';
+      clockAdded[0] = clockError[0] = '\0';
     }
     switch (portalRoute(portalMode, method == HTTP_POST, uri.c_str())) {
       case PortalAction::RootPage: handleRoot(); break;
       case PortalAction::SaveWifi: handleSave(); break;
       case PortalAction::LocationSearch: handleLocationSearch(); break;
       case PortalAction::LocationUse: handleLocationUse(); break;
+      case PortalAction::ClockSearch: handleClockSearch(); break;
+      case PortalAction::ClockAdd: handleClockAdd(); break;
       case PortalAction::RedirectRoot:
         if (method == HTTP_POST) {
           Serial.printf("[SETUP] POST %s ignored in %s mode\n", uri.c_str(), portalModeName(portalMode));
@@ -553,6 +625,7 @@ static void applySubmission() {
 static void logPortalMode(PortalMode mode) {
   Serial.printf("[SETUP] Portal mode: %s\n", portalModeName(mode));
   if (mode == PortalMode::Location) Serial.println("[LOCATION] Portal started");
+  if (mode == PortalMode::WorldClock) Serial.println("[WORLD CLOCK] Portal started");
 }
 
 // Per-mode state for a new mode (main task).
@@ -560,6 +633,7 @@ static void beginPortalMode(PortalMode mode) {
   portalMode = mode;
   firstRunMode = mode == PortalMode::FirstRunWifi;
   shownLocationRevision = locationRevision();
+  shownClockRevision = localClocksRevision();
   resetLocationSearch();
   logPortalMode(mode);
 }
@@ -595,6 +669,7 @@ static bool startSetup(PortalMode mode) {
   beginPortalMode(mode);
   pageStateReset = false;
   locationSaved[0] = locationError[0] = '\0'; // The setup task is not running yet.
+  clockAdded[0] = clockError[0] = '\0';
   haveNetwork = hasWifiNetwork();
   serverCheck = ServerCheck::NotChecked;
   restartIssued = false;
@@ -633,6 +708,14 @@ bool startLocationSetup() {
 
 bool wifiSetupForLocation() {
   return portalMode == PortalMode::Location;
+}
+
+bool startWorldClockSetup() {
+  return startSetup(PortalMode::WorldClock);
+}
+
+bool wifiSetupForWorldClock() {
+  return portalMode == PortalMode::WorldClock;
 }
 
 void stopWifiSetup() {
@@ -719,6 +802,15 @@ void updateWifiSetup() {
     connectedAt = millis();
     lastActivity = millis();
     setPhase(WifiSetupPhase::LocationSaved);
+    return;
+  }
+
+  // World clock page: a clock was added (by the setup task) -> report it. The
+  // hotspot stays open for another one (STOP SETUP, or the idle timeout).
+  if (portalMode == PortalMode::WorldClock && localClocksRevision() != shownClockRevision) {
+    shownClockRevision = localClocksRevision();
+    lastActivity = millis();
+    setPhase(WifiSetupPhase::ClockAdded);
     return;
   }
 

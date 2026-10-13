@@ -8,6 +8,8 @@
 // Stopwatch returns to Utilities).
 void openSettings();
 void openSettingsAt(SettingsView view);
+// From the CLOCKS page (EDIT, ADD CLOCK): BACK on WORLD CLOCKS returns there.
+void openSettingsFromClocks(SettingsView view);
 void drawSettingsPage();
 void handleSettingsTouch(int x, int y);
 // Call every loop(): debounced saves, periodic value refresh, Wi-Fi setup and

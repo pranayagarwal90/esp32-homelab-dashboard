@@ -36,17 +36,6 @@ static void printCentered(const char* text, int y, uint8_t size, uint16_t color)
   tft.print(text);
 }
 
-// Large button, text size 2; disabled ones are dark (FIRMWARE / BUILD style).
-static void drawActionButton(int x, int y, int w, int h, const char* label, bool enabled, uint16_t fill) {
-  uint16_t back = enabled ? fill : TFT_BLACK;
-  tft.fillRoundRect(x, y, w, h, 8, back);
-  tft.drawRoundRect(x, y, w, h, 8, enabled ? TFT_LIGHTGREY : TFT_DARKGREY);
-  tft.setTextSize(2);
-  tft.setTextColor(enabled ? TFT_WHITE : TFT_DARKGREY, back);
-  tft.setCursor(x + (w - tft.textWidth(label)) / 2, y + (h - 14) / 2);
-  tft.print(label);
-}
-
 // --- Keypad ------------------------------------------------------------------------------------
 
 static void drawKey(int row, int column) {

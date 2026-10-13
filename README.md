@@ -330,6 +330,7 @@ g++ -std=c++11 -Wall -Wextra -Werror -Ifirmware/include firmware/test/test_porta
 g++ -std=c++11 -Wall -Wextra -Werror -Ifirmware/include firmware/test/test_time.cpp -o /tmp/test-time && /tmp/test-time
 g++ -std=c++11 -Wall -Wextra -Werror -Ifirmware/include firmware/test/test_location.cpp -o /tmp/test-location && /tmp/test-location
 g++ -std=c++11 -Wall -Wextra -Werror -Ifirmware/include firmware/test/test_postal_code.cpp -o /tmp/test-postal-code && /tmp/test-postal-code
+g++ -std=c++11 -Wall -Wextra -Werror -Ifirmware/include firmware/test/test_world_clocks.cpp -o /tmp/test-world-clocks && /tmp/test-world-clocks
 # Needs ArduinoJson from a previous `pio run` (header-only):
 g++ -std=c++11 -Wall -Wextra -Werror -Ifirmware/include -Ifirmware/.pio/libdeps/esp32dev/ArduinoJson/src firmware/test/test_ai_logic.cpp -o /tmp/test-ai && /tmp/test-ai
 g++ -std=c++11 -Wall -Wextra -Werror -Ifirmware/include -Ifirmware/.pio/libdeps/esp32dev/ArduinoJson/src firmware/test/test_service_status.cpp -o /tmp/test-service-status && /tmp/test-service-status

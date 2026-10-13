@@ -1,5 +1,6 @@
 #pragma once
 #include <stdint.h>
+#include "LocalClockLogic.h"
 #include "LocationLogic.h"
 #include "OpenMeteoParse.h"
 
@@ -12,7 +13,9 @@
 // Source precedence (LocationLogic.h): a location on the device -> direct;
 // otherwise a backend -> /api/status weather as before; otherwise none.
 
-// Main task, every loop: refresh schedule, apply results, redraw.
+// Main task, every loop: refresh schedule, apply results, redraw. Also
+// refreshes the world clocks' UTC offsets (LocalClockStore) on the same
+// worker: one small request per clock, sequentially, every 6 hours.
 void serviceDirectWeather();
 WeatherSource weatherSource();
 // What the weather areas of Home, Weather, Time show.
@@ -47,6 +50,11 @@ bool requestLocationSearch(const char* query);
 // the same geocoding request as the phone page, over the normal Wi-Fi.
 bool requestPostalSearch(const char* digits);
 LocationSearchState locationSearchState();  // Cheap: for polling.
+// Setup page task: SEARCH ON PHONE for a world clock. The same search; the
+// pick goes to the world clocks only (never the device location).
+bool requestClockSearch(const char* query);
+// label: the place, for the page. Stale if that result is gone.
+ClockAddResult addClockFromSearch(uint32_t generation, int index, char* label, size_t size);
 void locationSearchSnapshot(LocationSearchSnapshot& out);
 // Saves results[index] of that generation as the device location.
 bool chooseLocationResult(uint32_t generation, int index);

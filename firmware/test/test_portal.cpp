@@ -1,4 +1,4 @@
-// The setup hotspot's three modes, through the same routing the device uses
+// The setup hotspot's four modes, through the same routing the device uses
 // (SetupPage.h portalRoute + renderPortalRoot): what a phone sees after
 // joining, whatever URL it opens first (captive-portal probes included), and
 // that a form from another mode (a stale tab) changes nothing.
@@ -30,8 +30,11 @@ static std::string phoneOpens(PortalMode mode, const char* path, bool post = fal
   setup.backend = "http://192.0.2.10:8090";
   LocationPageView location;
   location.wifiConnected = true;
+  WorldClockPageView clocks;
+  clocks.wifiConnected = true;
+  clocks.count = 1;
   std::string page;
-  renderPortalRoot(page, mode, setup, location);
+  renderPortalRoot(page, mode, setup, location, clocks);
   return page;
 }
 
@@ -39,11 +42,13 @@ static const char* PROBES[] = {
   "/", "/hotspot-detect.html", "/library/test/success.html", "/generate_204", "/gen_204",
   "/connecttest.txt", "/ncsi.txt", "/redirect", "/canonical.html", "/success.txt", "/favicon.ico",
   "/does-not-exist", "/location", "/save", "/location/search",  // GETs of POST routes: not actions.
+  "/clock/search", "/clock/add",
 };
 
 static void assertWifiPage(const std::string& page) {
   assert(has(page, "<select name=net>") && has(page, "<input name=pass type=password"));
   assert(!has(page, "Town, city or postal code") && !has(page, "/location/search"));
+  assert(!has(page, "Add World Clock") && !has(page, "/clock/"));
 }
 
 static void testFirstRunWifi() {
@@ -73,8 +78,22 @@ static void testLocation() {
            has(page, "<button>Search</button>") && has(page, "action=/location/search"));
     // Nothing else: no Wi-Fi selector or password, no backend address.
     for (const char* other : {"<select name=net>", "name=pass", "type=password", "name=server", "HomeDeck Backend",
-                              "action=/save", "Connect</button>"}) {
+                              "action=/save", "Connect</button>", "Add World Clock", "/clock/"}) {
       if (has(page, other)) fprintf(stderr, "location page (%s) contains %s\n", path, other);
+      assert(!has(page, other));
+    }
+  }
+}
+
+static void testWorldClock() {
+  for (const char* path : PROBES) {
+    std::string page = phoneOpens(PortalMode::WorldClock, path);
+    assert(has(page, "<h3>Add World Clock</h3>") && has(page, "Town or city") &&
+           has(page, "<button>Search</button>") && has(page, "action=/clock/search") && has(page, "1 of 4 clocks added."));
+    // Not the Location page (a pick here never sets the device location), not Wi-Fi.
+    for (const char* other : {"<select name=net>", "name=pass", "name=server", "HomeDeck Backend", "action=/save",
+                              "Town, city or postal code", "/location/", "Use this location", "<h3>Location</h3>"}) {
+      if (has(page, other)) fprintf(stderr, "world clock page (%s) contains %s\n", path, other);
       assert(!has(page, other));
     }
   }
@@ -86,6 +105,17 @@ static void testActionsFollowTheMode() {
   assert(portalRoute(PortalMode::FirstRunWifi, true, "/save") == A::SaveWifi);
   assert(portalRoute(PortalMode::WifiAndBackend, true, "/save") == A::SaveWifi);
   assert(portalRoute(PortalMode::Location, true, "/save") == A::RedirectRoot);
+  assert(portalRoute(PortalMode::WorldClock, true, "/save") == A::RedirectRoot);
+  // World clock search / add: only in WorldClock mode; Location mode's routes
+  // never add a clock and WorldClock mode's never set the location.
+  for (PortalMode m : {PortalMode::FirstRunWifi, PortalMode::WifiAndBackend, PortalMode::Location}) {
+    assert(portalRoute(m, true, "/clock/search") == A::RedirectRoot);
+    assert(portalRoute(m, true, "/clock/add") == A::RedirectRoot);
+  }
+  assert(portalRoute(PortalMode::WorldClock, true, "/clock/search") == A::ClockSearch);
+  assert(portalRoute(PortalMode::WorldClock, true, "/clock/add") == A::ClockAdd);
+  assert(portalRoute(PortalMode::WorldClock, true, "/location/search") == A::RedirectRoot);
+  assert(portalRoute(PortalMode::WorldClock, true, "/location/use") == A::RedirectRoot);
   // Location search / pick: only in Location mode; never a Wi-Fi save.
   for (PortalMode m : {PortalMode::FirstRunWifi, PortalMode::WifiAndBackend}) {
     assert(portalRoute(m, true, "/location/search") == A::RedirectRoot);
@@ -94,8 +124,10 @@ static void testActionsFollowTheMode() {
   assert(portalRoute(PortalMode::Location, true, "/location/search") == A::LocationSearch);
   assert(portalRoute(PortalMode::Location, true, "/location/use") == A::LocationUse);
   // GETs of action paths and odd input do nothing.
-  for (PortalMode m : {PortalMode::FirstRunWifi, PortalMode::WifiAndBackend, PortalMode::Location}) {
+  for (PortalMode m : {PortalMode::FirstRunWifi, PortalMode::WifiAndBackend, PortalMode::Location,
+                       PortalMode::WorldClock}) {
     assert(portalRoute(m, false, "/save") == A::RedirectRoot);
+    assert(portalRoute(m, false, "/clock/add") == A::RedirectRoot);
     assert(portalRoute(m, false, "/location/use") == A::RedirectRoot);
     assert(portalRoute(m, true, "/") == A::RedirectRoot);
     assert(portalRoute(m, false, nullptr) == A::RedirectRoot);
@@ -104,6 +136,7 @@ static void testActionsFollowTheMode() {
   assert(strcmp(portalModeName(PortalMode::FirstRunWifi), "Wi-Fi") == 0);
   assert(strcmp(portalModeName(PortalMode::WifiAndBackend), "Backend") == 0);
   assert(strcmp(portalModeName(PortalMode::Location), "Location") == 0);
+  assert(strcmp(portalModeName(PortalMode::WorldClock), "World Clock") == 0);
 }
 
 // --- The device uses exactly this routing --------------------------------------------------
@@ -145,7 +178,9 @@ static void testDeviceRouting() {
   // "/" is drawn for the mode; both senders go through renderPortalRoot.
   std::string root = functionBody(portal, "static void handleRoot() {");
   assert(has(root, "if (portalMode == PortalMode::Location) {"));
-  assert(occurrences(portal, "renderPortalRoot(page, ") == 2);
+  assert(occurrences(portal, "renderPortalRoot(page, ") == 3);
+  assert(has(root, "if (portalMode == PortalMode::WorldClock) {"));
+  assert(has(portal, "renderPortalRoot(page, PortalMode::WorldClock, SetupFormView(), LocationPageView(), view);"));
   assert(!has(portal, "renderSetupForm(") && !has(portal, "renderLocationPage("));
   // Never cached: one server.send() in total, inside sendNoStore().
   assert(occurrences(portal, "server.send(") == 1 && has(portal, "server.sendHeader(\"Cache-Control\", \"no-store\");"));
@@ -159,6 +194,15 @@ static void testDeviceRouting() {
   // Each entry point starts its own mode.
   assert(has(portal, "return startSetup(firstRun ? PortalMode::FirstRunWifi : PortalMode::WifiAndBackend);"));
   assert(has(portal, "return startSetup(PortalMode::Location);"));
+  assert(has(portal, "return startSetup(PortalMode::WorldClock);"));
+  // The clock handlers refuse other modes and only touch the clock list.
+  std::string clockAdd = functionBody(portal, "static void handleClockAdd() {");
+  assert(has(clockAdd, "if (portalMode != PortalMode::WorldClock) return redirectHome();"));
+  assert(has(clockAdd, "addClockFromSearch(") && !has(clockAdd, "chooseLocationResult") && !has(clockAdd, "saveLocation"));
+  std::string locationUse = functionBody(portal, "static void handleLocationUse() {");
+  assert(!has(locationUse, "Clock"));
+  assert(has(functionBody(portal, "static void handleClockSearch() {"),
+             "if (portalMode != PortalMode::WorldClock) return redirectHome();"));
   std::string settings = readSource("src/SettingsScreen.cpp");
   std::string run = functionBody(settings, "static void runConfirmed(");
   auto caseBody = [&run](const char* label) {
@@ -169,6 +213,8 @@ static void testDeviceRouting() {
   assert(has(caseBody("case ConfirmAction::StartLocationSetup:"), "startLocationSetup();"));
   assert(has(caseBody("case ConfirmAction::StartWifiSetup:"), "startWifiSetup();"));
   assert(!has(caseBody("case ConfirmAction::StartWifiSetup:"), "startLocationSetup"));
+  assert(has(caseBody("case ConfirmAction::StartClockSetup:"), "startWorldClockSetup();"));
+  assert(!has(caseBody("case ConfirmAction::StartLocationSetup:"), "WorldClock"));
   assert(has(readSource("src/SetupScreen.cpp"), "startWifiSetup(true);"));
   std::string location = readSource("src/WifiSettingsScreen.cpp");
   std::string touch = functionBody(location, "void handleLocationSettingsTouch(int x, int y) {");
@@ -178,12 +224,14 @@ static void testDeviceRouting() {
   // One-line logs per mode.
   assert(has(portal, "Serial.printf(\"[SETUP] Portal mode: %s\\n\", portalModeName(mode));"));
   assert(has(portal, "Serial.println(\"[LOCATION] Portal started\");"));
+  assert(has(portal, "Serial.println(\"[WORLD CLOCK] Portal started\");"));
 }
 
 int main() {
   testFirstRunWifi();
   testBackend();
   testLocation();
+  testWorldClock();
   testActionsFollowTheMode();
   testDeviceRouting();
   puts("portal tests passed");

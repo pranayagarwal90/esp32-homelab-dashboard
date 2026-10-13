@@ -1,5 +1,6 @@
 #pragma once
 #include <string.h>
+#include "LocalClockLogic.h"
 #include "LocationLogic.h"
 #include "ProvisioningLogic.h"
 
@@ -181,6 +182,94 @@ void renderLocationPage(Out& page, const LocationPageView& v) {
   }
 }
 
+// --- World clock page (World Clocks > ADD CLOCK > SEARCH ON PHONE) ---------------------
+// The same search as the Location page; a pick is added to the world clocks
+// (never the device location). Results already added say so instead of
+// offering ADD CLOCK; a full list (4 of 4) offers no search.
+
+struct WorldClockPageView {
+  bool wifiConnected = false;
+  int count = 0;                            // Clocks on the device.
+  const char* added = "";                   // Just added on this page, or "".
+  const char* error = "";                   // A rejected search or add, or "".
+  LocationSearchState state = LocationSearchState::Idle;
+  LocationSearchError searchError = LocationSearchError::None;
+  const char* query = "";
+  uint32_t generation = 0;
+  const Location* results = nullptr;        // resultCount entries.
+  const bool* alreadyAdded = nullptr;       // Per result (may be nullptr).
+  int resultCount = 0;
+};
+
+template <class Out>
+void renderWorldClockPage(Out& page, const WorldClockPageView& v) {
+  page += "<h3>Add World Clock</h3>";
+  if (v.added && v.added[0]) {
+    page += "<p><b>Added: ";
+    appendHtmlEscaped(page, v.added);
+    page += ".</b> It appears on HomeDeck in a moment.</p>";
+  }
+  char count[48];
+  snprintf(count, sizeof(count), "<p>%d of %d clocks added.</p>", v.count, LOCAL_CLOCKS_MAX);
+  page += count;
+  if (v.error && v.error[0]) {
+    page += "<p class=err><b>";
+    appendHtmlEscaped(page, v.error);
+    page += "</b></p>";
+  }
+  if (v.count >= LOCAL_CLOCKS_MAX) {
+    page += "<p>Remove a clock on HomeDeck to add another. You can close this page.</p>";
+    return;
+  }
+  if (!v.wifiConnected) {
+    page += "<p class=err><b>";
+    page += locationSearchErrorText(LocationSearchError::NoWifi);
+    page += " Set up Wi-Fi first.</b></p>";
+  }
+  page += "<form method=post action=/clock/search><label>Town or city"
+          "<input name=q maxlength=63 autocomplete=off autocapitalize=words spellcheck=false value=\"";
+  appendHtmlEscaped(page, v.query);
+  page += "\"></label><small>For example: London or Kathmandu</small><button>Search</button></form>";
+  switch (v.state) {
+    case LocationSearchState::Searching:
+      page += "<meta http-equiv=refresh content=\"2;url=/\"><p>Searching for &quot;";
+      appendHtmlEscaped(page, v.query);
+      page += "&quot;... <a href=/>Refresh</a></p>";
+      break;
+    case LocationSearchState::Failed:
+      page += "<p class=err><b>";
+      page += locationSearchErrorText(v.searchError);
+      page += "</b></p>";
+      break;
+    case LocationSearchState::Done:
+      if (v.resultCount == 0) {
+        page += "<p>No places found for &quot;";
+        appendHtmlEscaped(page, v.query);
+        page += "&quot;. Try another spelling, or add the country.</p>";
+      }
+      for (int i = 0; i < v.resultCount; i++) {
+        char label[LOCATION_NAME_MAX + 2 * LOCATION_REGION_MAX + 8];
+        formatLocationLabel(v.results[i], label, sizeof(label));
+        page += "<p><b>";
+        appendHtmlEscaped(page, label);
+        page += "</b></p>";
+        if (v.alreadyAdded && v.alreadyAdded[i]) {
+          page += "<p>Already added</p>";
+          continue;
+        }
+        char hidden[96];
+        snprintf(hidden, sizeof(hidden), "<input type=hidden name=g value=%lu><input type=hidden name=i value=%d>",
+                 (unsigned long)v.generation, i);
+        page += "<form method=post action=/clock/add>";
+        page += hidden;
+        page += "<button>Add clock</button></form>";
+      }
+      break;
+    case LocationSearchState::Idle:
+      break;
+  }
+}
+
 // --- Portal modes and routing -----------------------------------------------------------
 // Why the hotspot was started decides what every page shows. Phones open "/"
 // or a captive-portal probe (any path), so the mode, not the URL, picks the
@@ -190,13 +279,15 @@ void renderLocationPage(Out& page, const LocationPageView& v) {
 //   WifiAndBackend  Settings (Wi-Fi CHANGE, HomeDeck Backend SET UP): Wi-Fi
 //                   plus the optional HomeDeck Backend field.
 //   Location        Settings > Location: the location search only.
-enum class PortalMode : uint8_t { FirstRunWifi, WifiAndBackend, Location };
+//   WorldClock      World Clocks > ADD CLOCK: the city search for a clock only.
+enum class PortalMode : uint8_t { FirstRunWifi, WifiAndBackend, Location, WorldClock };
 
 inline const char* portalModeName(PortalMode mode) {
   switch (mode) {
     case PortalMode::FirstRunWifi: return "Wi-Fi";
     case PortalMode::WifiAndBackend: return "Backend";
     case PortalMode::Location: return "Location";
+    case PortalMode::WorldClock: return "World Clock";
   }
   return "";
 }
@@ -206,6 +297,8 @@ enum class PortalAction : uint8_t {
   SaveWifi,        // POST /save (Wi-Fi modes only).
   LocationSearch,  // POST /location/search (Location mode only).
   LocationUse,     // POST /location/use (Location mode only).
+  ClockSearch,     // POST /clock/search (WorldClock mode only).
+  ClockAdd,        // POST /clock/add (WorldClock mode only).
   RedirectRoot     // Everything else (captive probes, unknown paths, a form
                    // from another mode): back to "/", nothing changes.
 };
@@ -213,23 +306,32 @@ enum class PortalAction : uint8_t {
 inline PortalAction portalRoute(PortalMode mode, bool post, const char* path) {
   if (!path) return PortalAction::RedirectRoot;
   bool location = mode == PortalMode::Location;
+  bool wifi = mode == PortalMode::FirstRunWifi || mode == PortalMode::WifiAndBackend;
   if (!post && strcmp(path, "/") == 0) return PortalAction::RootPage;
-  if (post && strcmp(path, "/save") == 0) return location ? PortalAction::RedirectRoot : PortalAction::SaveWifi;
+  if (post && strcmp(path, "/save") == 0) return wifi ? PortalAction::SaveWifi : PortalAction::RedirectRoot;
   if (post && strcmp(path, "/location/search") == 0) {
     return location ? PortalAction::LocationSearch : PortalAction::RedirectRoot;
   }
   if (post && strcmp(path, "/location/use") == 0) {
     return location ? PortalAction::LocationUse : PortalAction::RedirectRoot;
   }
+  bool clock = mode == PortalMode::WorldClock;
+  if (post && strcmp(path, "/clock/search") == 0) return clock ? PortalAction::ClockSearch : PortalAction::RedirectRoot;
+  if (post && strcmp(path, "/clock/add") == 0) return clock ? PortalAction::ClockAdd : PortalAction::RedirectRoot;
   return PortalAction::RedirectRoot;
 }
 
 // The body of "/" for the mode (after the page head). setup.firstRun is
 // taken from the mode, so the two Wi-Fi pages can never be mixed up.
 template <class Out>
-void renderPortalRoot(Out& page, PortalMode mode, const SetupFormView& setup, const LocationPageView& location) {
+void renderPortalRoot(Out& page, PortalMode mode, const SetupFormView& setup, const LocationPageView& location,
+                      const WorldClockPageView& clocks = WorldClockPageView()) {
   if (mode == PortalMode::Location) {
     renderLocationPage(page, location);
+    return;
+  }
+  if (mode == PortalMode::WorldClock) {
+    renderWorldClockPage(page, clocks);
     return;
   }
   SetupFormView view = setup;
