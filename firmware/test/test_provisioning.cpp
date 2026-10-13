@@ -283,17 +283,15 @@ static void testSetupLoopDrivesTheSwitch() {
   std::string save = functionBody(readSource("WifiProvisioning.cpp"), "static void handleSave() {");
   assert(save.find("WiFi.begin") == std::string::npos && save.find("requestWifiSwitch") == std::string::npos);
   assert(save.find("xQueueOverwrite(submissions") != std::string::npos);
-  // The catch-all redirect is registered after the real routes, so it can
-  // never swallow GET / or POST /save; the form offers the scanned list.
+  // One handler takes every request and routes it by the portal mode
+  // (GET / -> page, POST /save -> handleSave, probes -> "/"; test_portal).
   std::string source = readSource("WifiProvisioning.cpp");
-  size_t root = source.find("server.on(\"/\", HTTP_GET, handleRoot);");
-  size_t post = source.find("server.on(\"/save\", HTTP_POST, handleSave);");
-  size_t all = source.find("server.addHandler(new RedirectEverything());");
-  assert(root != std::string::npos && post != std::string::npos && all != std::string::npos);
-  assert(root < all && post < all);
+  assert(source.find("server.addHandler(new PortalRequests());") != std::string::npos);
+  assert(source.find("case PortalAction::SaveWifi: handleSave(); break;") != std::string::npos);
+  assert(source.find("case PortalAction::RootPage: handleRoot(); break;") != std::string::npos);
   assert(source.find("server.onNotFound(") == std::string::npos);
   // The form (with the scanned list) is rendered by SetupPage.h: test_setup_page.
-  assert(source.find("renderSetupForm(page, view);") != std::string::npos);
+  assert(source.find("renderPortalRoot(page, portalMode, view, LocationPageView());") != std::string::npos);
   // Scanning: the driver's done event, never the wrapper's 6 s scanComplete()
   // timeout, and a fully initialized scan configuration.
   assert(source.find("WiFi.scanNetworks(") == std::string::npos);

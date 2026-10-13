@@ -7,8 +7,12 @@
 #include "CalendarScreen.h"
 #include "DeviceConfig.h"
 #include "DeviceIdentity.h"
+#include "DirectWeather.h"
 #include "Display.h"
 #include "FirmwareUpdate.h"
+#include "HomeScreen.h"
+#include "LocalTime.h"
+#include "LocationStore.h"
 #include "NetworkManager.h"
 #include "OtaManager.h"
 #include "PageRouter.h"
@@ -20,6 +24,7 @@
 #include "SetupScreen.h"
 #include "StatusClient.h"
 #include "StopwatchScreen.h"
+#include "TimeWeatherScreen.h"
 #include "TouchHandler.h"
 #include "UpdateScreen.h"
 #include "WeatherScreen.h"
@@ -31,6 +36,23 @@
 // All TFT drawing and JPEG decoding happen on this (the Arduino loop) task.
 // The status, photo and AI workers only do network I/O and never draw.
 TFT_eSPI tft = TFT_eSPI();
+
+// The local clock changed (minute or date): redraw what shows it. Only
+// pages that display the time; never under games or an update.
+static void refreshClockViews() {
+  switch (app.currentPage) {
+    case PAGE_HOME: refreshHomePage(); break;
+    case PAGE_TIME: drawTimePage(); break;
+    case PAGE_CALENDAR: { // Only when "today" moves (midnight).
+      static int shownDay = 0;
+      if (app.time.currentDay != shownDay) drawCurrentPage();
+      shownDay = app.time.currentDay;
+      break;
+    }
+    case PAGE_SCREENSAVER: refreshScreensaverClock(); break;
+    default: break;
+  }
+}
 
 void setup() {
   Serial.begin(115200);
@@ -51,6 +73,7 @@ void setup() {
   // dashboard. The backend is optional (BackendMode.h): without one the
   // dashboard runs in Standalone Mode; an unreachable one stays Full mode.
   loadDeviceConfig();
+  loadLocation();
   initNetwork();
   SetupReason setupReason = bootSetupReason(hasWifiNetwork(), backendConfig());
   if (setupReason == SetupReason::None && !connectWiFi()) setupReason = SetupReason::WifiFailed;
@@ -60,6 +83,7 @@ void setup() {
     return;
   }
   Serial.println(deviceModeLog(deviceMode(true, backendConfig()), backendConfig()));
+  beginLocalTime(); // NTP (UTC) for the clock and for TLS; needs no backend or location.
 
   setupOTA(); // Developer builds only (HOMEDECK_DEV_OTA); a no-op otherwise.
   randomSeed(micros());
@@ -72,7 +96,6 @@ void setup() {
   fetchHomelabStatus();
   requestPhotoList();
 
-  setCalendarMonth(app.time.currentYear, app.time.currentMonth);
   app.lastInteraction = millis();
 }
 
@@ -97,6 +120,8 @@ void loop() {
   updatePhotos();
   updateAiAssistant();
   updateSettings();
+  if (updateLocalClock()) refreshClockViews();
+  serviceDirectWeather();
   processStatusResult();
   updateBacklight();
 

@@ -18,15 +18,25 @@ enum class WifiSetupPhase : uint8_t {
   Off, Waiting, Connecting, Connected, Failed, Stopping, StartFailed,
   Restarting,  // Configuration saved; the device restarts shortly.
   NoChange,    // Valid submission that changed nothing.
-  SaveFailed   // NVS write failed; nothing applied.
+  SaveFailed,  // NVS write failed; nothing applied.
+  LocationSaved // Location page: a place was picked and saved.
 };
 
 // Result of the quick GET <backend>/api/status after saving.
 enum class ServerCheck : uint8_t { NotChecked, Reachable, NotReachable };
 
-// Main task. firstRun: Setup Mode at boot (never closes by itself and always
-// restarts after saving). Returns false if the hotspot or task could not start.
+// Main task. firstRun: Setup Mode at boot (Wi-Fi page; never closes by itself
+// and always restarts after saving); otherwise the Settings page (Wi-Fi + the
+// optional HomeDeck Backend). Each start sets the portal mode (SetupPage.h)
+// that decides what "/" and every captive-portal probe show; a session that
+// is already open switches to it (or, while busy joining/saving, refuses).
+// Returns false if the hotspot or task could not start.
 bool startWifiSetup(bool firstRun = false);
+// Main task. The same hotspot for Settings > Location: the page searches for
+// a place (DirectWeather) and saves the chosen one; Wi-Fi and backend are not
+// offered there. Needs the device online (AP+STA).
+bool startLocationSetup();
+bool wifiSetupForLocation();
 // Main task. Asynchronous: the hotspot closes once the setup task has exited.
 void stopWifiSetup();
 // Main task, every loop: forwards submissions, tracks the switch, saves,

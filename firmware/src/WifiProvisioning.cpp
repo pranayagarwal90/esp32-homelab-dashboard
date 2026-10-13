@@ -8,6 +8,8 @@
 #include "WifiProvisioning.h"
 #include "DeviceConfig.h"
 #include "DeviceIdentity.h"
+#include "DirectWeather.h"
+#include "LocationStore.h"
 #include "NetworkManager.h"
 #include "PowerManager.h"
 #include "ProvisioningLogic.h"
@@ -33,8 +35,12 @@ static volatile WifiSetupPhase phase = WifiSetupPhase::Off; // Written by main o
 static volatile ServerCheck serverCheck = ServerCheck::NotChecked; // Main only.
 static volatile bool stopRequested = false;                // Main -> task.
 static volatile bool taskRunning = false;                  // Task -> main.
-static volatile bool firstRunMode = false;                 // Main, before the task starts.
+static volatile bool firstRunMode = false;                 // portalMode == FirstRunWifi.
 static volatile bool haveNetwork = false;                  // Main, before the task starts.
+// Why the hotspot is up (SetupPage.h); picks the page for "/" and every probe.
+// Main writes (start / switch), the setup task reads. Runtime only.
+static volatile PortalMode portalMode = PortalMode::FirstRunWifi;
+static volatile bool pageStateReset = false;               // Main -> task: forget re-fill state.
 static volatile uint32_t lastRequestMs = 0;                // Task -> main.
 static QueueHandle_t submissions = nullptr;                 // Task -> main, 1 slot.
 static portMUX_TYPE targetLock = portMUX_INITIALIZER_UNLOCKED;
@@ -51,6 +57,7 @@ static unsigned long restartAt = 0;
 static bool restartIssued = false;
 static char pendingBackend[BACKEND_URL_MAX] = "";
 static bool pendingBackendChanged = false;
+static uint32_t shownLocationRevision = 0;
 
 // --- Setup task only -------------------------------------------------------------------
 
@@ -71,6 +78,10 @@ static bool scanEventRegistered = false; // Main task, once.
 static char formSsid[33] = "";
 static char formBackend[BACKEND_URL_MAX] = "";
 static bool formFilled = false;
+// Location page (location mode only).
+static LocationSearchSnapshot locationSearch; // Copied per request; static to spare the task stack.
+static char locationSaved[LOCATION_NAME_MAX + 2 * LOCATION_REGION_MAX + 8] = "";
+static char locationError[64] = "";
 
 static void setTarget(const char* ssid) {
   portENTER_CRITICAL(&targetLock);
@@ -118,6 +129,13 @@ static const char* serverCheckText() {
     case ServerCheck::NotChecked: break;
   }
   return "";
+}
+
+// Every portal response: the same URL shows different pages per mode, so a
+// phone must never show (or post) a cached page from another session.
+static void sendNoStore(int code, const char* type, const String& body) {
+  server.sendHeader("Cache-Control", "no-store");
+  server.send(code, type, body);
 }
 
 static void appendStatus(String& page) {
@@ -252,14 +270,79 @@ static void sendForm(int code, const char* error, const char* ssid, const char* 
   view.scanFailed = scanFailed;
   view.ssid = ssid;
   view.backend = backend;
-  renderSetupForm(page, view); // SetupPage.h: no backend field on first run.
+  renderPortalRoot(page, portalMode, view, LocationPageView()); // Wi-Fi modes: firstRun from the mode.
   page += "</body></html>";
-  server.send(code, "text/html", page);
+  sendNoStore(code, "text/html", page);
+}
+
+// Settings > Location: search and pick (DirectWeather does the searching).
+static void sendLocationPage(int code) {
+  locationSearchSnapshot(locationSearch);
+  Location current;
+  char currentLabel[sizeof(locationSaved)] = "";
+  if (currentLocation(current)) formatLocationLabel(current, currentLabel, sizeof(currentLabel));
+  LocationPageView view;
+  view.wifiConnected = WiFi.status() == WL_CONNECTED;
+  view.current = currentLabel;
+  view.saved = locationSaved;
+  view.error = locationError;
+  view.state = locationSearch.state;
+  view.searchError = locationSearch.error;
+  view.query = locationSearch.query;
+  view.generation = locationSearch.generation;
+  view.results = locationSearch.results;
+  view.count = locationSearch.count;
+  String page = FPSTR(PAGE_HEAD);
+  renderPortalRoot(page, PortalMode::Location, SetupFormView(), view);
+  page += "</body></html>";
+  sendNoStore(code, "text/html", page);
+}
+
+static void redirectHome() {
+  server.sendHeader("Location", "/", true);
+  sendNoStore(303, "text/plain", "");
+}
+
+static void handleLocationSearch() {
+  lastRequestMs = millis();
+  if (portalMode != PortalMode::Location) return redirectHome(); // Also refused by portalRoute.
+  String query = server.arg("q");
+  locationSaved[0] = '\0';
+  locationError[0] = '\0';
+  if (!requestLocationSearch(query.c_str())) {
+    snprintf(locationError, sizeof(locationError), "Enter a town, city or postal code (2 or more characters).");
+    sendLocationPage(400);
+    locationError[0] = '\0';
+    return;
+  }
+  Serial.printf("[LOCATION] Search: \"%s\"\n", query.c_str());
+  redirectHome();
+}
+
+static void handleLocationUse() {
+  lastRequestMs = millis();
+  if (portalMode != PortalMode::Location) return redirectHome(); // Also refused by portalRoute.
+  uint32_t generation = uint32_t(strtoul(server.arg("g").c_str(), nullptr, 10));
+  int index = server.arg("i").toInt();
+  locationError[0] = '\0';
+  locationSearchSnapshot(locationSearch);
+  if (index >= 0 && index < locationSearch.count && generation == locationSearch.generation &&
+      chooseLocationResult(generation, index)) {
+    formatLocationLabel(locationSearch.results[index], locationSaved, sizeof(locationSaved));
+  } else {
+    snprintf(locationError, sizeof(locationError), "That result is no longer available. Search again.");
+  }
+  redirectHome();
 }
 
 static void handleRoot() {
   lastRequestMs = millis();
-  Serial.printf("[SETUP] %s %s -> setup page\n", methodName(), server.uri().c_str());
+  Serial.printf("[SETUP] %s %s -> %s page\n", methodName(), server.uri().c_str(), portalModeName(portalMode));
+  if (portalMode == PortalMode::Location) {
+    sendLocationPage(200);
+    locationError[0] = '\0';
+    return;
+  }
   if (server.hasArg("rescan")) {
     if (scanRequest(scan)) Serial.println("[SETUP] Refresh: network scan requested");
     else Serial.println("[SETUP] Refresh ignored: a scan is already running");
@@ -328,34 +411,51 @@ static void handleSave() {
     page += "<p>Saving. Watch the dashboard screen; it restarts if the HomeDeck Backend "
             "changed. <a href=/>Reload</a> to see the status.</p></body></html>";
   }
-  server.send(200, "text/html", page);
+  sendNoStore(200, "text/html", page);
 }
 
 static void handleRedirect() {
   Serial.printf("[SETUP] %s %s -> redirect to the setup page\n", methodName(), server.uri().c_str());
   server.sendHeader("Location", String("http://") + WiFi.softAPIP().toString() + "/", true);
-  server.send(302, "text/plain", "");
+  sendNoStore(302, "text/plain", "");
 }
 
-// Catch-all for captive-portal probes (e.g. iOS /hotspot-detect.html) and any
-// other URI: redirects to the setup page. Registered after "/" and "/save",
-// which therefore always match first (handlers are tried in order). As a
-// real handler it also avoids the WebServer's "request handler not found"
-// error log that onNotFound() requests produce.
-class RedirectEverything : public RequestHandler {
+// Every request, captive-portal probes included (e.g. iOS /hotspot-detect.html,
+// Android /generate_204), goes through portalRoute() for the current mode:
+// "/" draws that mode's page, a form posted from another mode (a stale tab)
+// changes nothing, and anything else redirects to "/". One handler for all,
+// so no route can bypass the mode; it also avoids the WebServer's "request
+// handler not found" log.
+class PortalRequests : public RequestHandler {
 public:
   bool canHandle(HTTPMethod, String) override { return true; }
-  bool handle(WebServer&, HTTPMethod, String) override {
-    handleRedirect();
+  bool handle(WebServer&, HTTPMethod method, String uri) override {
+    if (pageStateReset) { // The mode changed: forget the last session's re-fill state.
+      pageStateReset = false;
+      formFilled = false;
+      locationSaved[0] = locationError[0] = '\0';
+    }
+    switch (portalRoute(portalMode, method == HTTP_POST, uri.c_str())) {
+      case PortalAction::RootPage: handleRoot(); break;
+      case PortalAction::SaveWifi: handleSave(); break;
+      case PortalAction::LocationSearch: handleLocationSearch(); break;
+      case PortalAction::LocationUse: handleLocationUse(); break;
+      case PortalAction::RedirectRoot:
+        if (method == HTTP_POST) {
+          Serial.printf("[SETUP] POST %s ignored in %s mode\n", uri.c_str(), portalModeName(portalMode));
+          redirectHome();
+        } else {
+          handleRedirect();
+        }
+        break;
+    }
     return true;
   }
 };
 
 static void setupTask(void*) {
   if (!routesRegistered) {
-    server.on("/", HTTP_GET, handleRoot);
-    server.on("/save", HTTP_POST, handleSave);
-    server.addHandler(new RedirectEverything()); // Last: never shadows the routes above.
+    server.addHandler(new PortalRequests()); // The only handler: routing follows portalMode.
     routesRegistered = true;
   }
   dns.start(53, "*", WiFi.softAPIP());
@@ -450,8 +550,38 @@ static void applySubmission() {
   setPhase(WifiSetupPhase::Restarting);
 }
 
-bool startWifiSetup(bool firstRun) {
-  if (wifiSetupRunning()) return true;
+static void logPortalMode(PortalMode mode) {
+  Serial.printf("[SETUP] Portal mode: %s\n", portalModeName(mode));
+  if (mode == PortalMode::Location) Serial.println("[LOCATION] Portal started");
+}
+
+// Per-mode state for a new mode (main task).
+static void beginPortalMode(PortalMode mode) {
+  portalMode = mode;
+  firstRunMode = mode == PortalMode::FirstRunWifi;
+  shownLocationRevision = locationRevision();
+  resetLocationSearch();
+  logPortalMode(mode);
+}
+
+static bool startSetup(PortalMode mode) {
+  if (wifiSetupRunning()) {
+    // Already up (e.g. a Settings session still open): never keep serving the
+    // old mode's page. Switch in place unless it is busy joining, saving or
+    // closing; then refuse, and the open session's screen stays.
+    WifiSetupPhase current = phase;
+    if (portalMode == mode) return true;
+    if (current == WifiSetupPhase::Connecting || current == WifiSetupPhase::Restarting ||
+        current == WifiSetupPhase::Stopping || firstRunMode) {
+      Serial.printf("[SETUP] Busy in %s mode; %s not started\n", portalModeName(portalMode), portalModeName(mode));
+      return false;
+    }
+    beginPortalMode(mode);
+    pageStateReset = true;
+    lastActivity = millis();
+    setPhase(WifiSetupPhase::Waiting);
+    return true;
+  }
   if (!submissions) submissions = xQueueCreate(1, sizeof(SetupSubmission));
   if (!scanEventRegistered) {
     // Runs in the Arduino event task after the WiFi library has copied the
@@ -462,7 +592,9 @@ bool startWifiSetup(bool firstRun) {
     }, ARDUINO_EVENT_WIFI_SCAN_DONE);
     scanEventRegistered = true;
   }
-  firstRunMode = firstRun;
+  beginPortalMode(mode);
+  pageStateReset = false;
+  locationSaved[0] = locationError[0] = '\0'; // The setup task is not running yet.
   haveNetwork = hasWifiNetwork();
   serverCheck = ServerCheck::NotChecked;
   restartIssued = false;
@@ -486,9 +618,21 @@ bool startWifiSetup(bool firstRun) {
   }
   lastActivity = lastRequestMs = millis();
   Serial.printf("[SETUP] Hotspot started: %s at http://%s/ (%s mode)\n", apSsid,
-                WiFi.softAPIP().toString().c_str(), firstRun ? "first-run" : "settings");
+                WiFi.softAPIP().toString().c_str(), portalModeName(mode));
   setPhase(WifiSetupPhase::Waiting);
   return true;
+}
+
+bool startWifiSetup(bool firstRun) {
+  return startSetup(firstRun ? PortalMode::FirstRunWifi : PortalMode::WifiAndBackend);
+}
+
+bool startLocationSetup() {
+  return startSetup(PortalMode::Location);
+}
+
+bool wifiSetupForLocation() {
+  return portalMode == PortalMode::Location;
 }
 
 void stopWifiSetup() {
@@ -569,9 +713,19 @@ void updateWifiSetup() {
     return;
   }
 
+  // Location page: a pick was saved (by the setup task) -> report it, then close.
+  if (portalMode == PortalMode::Location && locationRevision() != shownLocationRevision) {
+    shownLocationRevision = locationRevision();
+    connectedAt = millis();
+    lastActivity = millis();
+    setPhase(WifiSetupPhase::LocationSaved);
+    return;
+  }
+
   // Setup Mode stays open until it restarts; from Settings it closes itself.
   if (firstRunMode) return;
-  if (current == WifiSetupPhase::Connected && millis() - connectedAt >= CLOSE_AFTER_SUCCESS_MS) {
+  if ((current == WifiSetupPhase::Connected || current == WifiSetupPhase::LocationSaved) &&
+      millis() - connectedAt >= CLOSE_AFTER_SUCCESS_MS) {
     stopWifiSetup();
   } else if (wifiSetupIdleMs() >= SETUP_IDLE_TIMEOUT_MS) {
     stopWifiSetup();

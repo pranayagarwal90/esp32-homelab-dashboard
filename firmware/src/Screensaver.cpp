@@ -90,6 +90,10 @@ void updateScreensaver() {
   drawScreensaverClock();
 }
 
+void refreshScreensaverClock() {
+  if (app.currentPage == PAGE_SCREENSAVER && !screensaverShowingPhoto) drawScreensaverClock();
+}
+
 void onScreensaverPhotoResult(bool shown) {
   if (shown) screensaverShowingPhoto = true;
   else drawScreensaverClock();

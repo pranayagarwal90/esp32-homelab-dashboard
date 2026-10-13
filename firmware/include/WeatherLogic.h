@@ -22,7 +22,7 @@ enum class WeatherCondition : uint8_t {
 //   65, 67, 82        HeavyRain (heavy rain, heavy freezing rain, violent showers)
 //   71, 73, 75, 77    Snow (slight, moderate, heavy, snow grains)
 //   85, 86            Snow (snow showers)
-//   95, 96, 99        Thunderstorm (with or without hail)
+//   95, 96, 97, 99    Thunderstorm (with or without hail; 97 heavy)
 //   anything else     Unknown
 inline WeatherCondition weatherConditionFor(int code) {
   switch (code) {
@@ -34,7 +34,7 @@ inline WeatherCondition weatherConditionFor(int code) {
     case 61: case 63: case 66: case 80: case 81: return WeatherCondition::Rain;
     case 65: case 67: case 82: return WeatherCondition::HeavyRain;
     case 71: case 73: case 75: case 77: case 85: case 86: return WeatherCondition::Snow;
-    case 95: case 96: case 99: return WeatherCondition::Thunderstorm;
+    case 95: case 96: case 97: case 99: return WeatherCondition::Thunderstorm;
     default: return WeatherCondition::Unknown;
   }
 }

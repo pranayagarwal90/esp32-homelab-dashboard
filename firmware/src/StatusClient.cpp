@@ -11,6 +11,8 @@
 #include "ServicesLogic.h"
 #include "StatusParse.h"
 #include "DeviceConfig.h"
+#include "DirectWeather.h"
+#include "LocalTime.h"
 #include "AppState.h"
 #include "BacklightPwm.h"
 #include "CalendarScreen.h"
@@ -282,19 +284,29 @@ void fetchHomelabStatus() {
 }
 
 static void applyStatusSnapshot(const StatusSnapshot& snapshot) {
-  backlightSetSchedule(snapshot.solar, millis());
-  updateBacklight();
+  // Weather and night dimming come from the backend only while it is the
+  // weather source: a location on the device (direct Open-Meteo) wins.
+  if (weatherSource() == WeatherSource::Backend) {
+    backlightSetSchedule(snapshot.solar, millis());
+    updateBacklight();
+    // Unavailable weather keeps the last known values for display.
+    if (snapshot.weather.weatherAvailable) {
+      app.weather = snapshot.weather;
+      app.weather.observedMs = millis();
+    }
+    else app.weather.weatherAvailable = false;
+  }
   app.metrics = snapshot.metrics;
   app.docker = snapshot.docker;
   app.services = snapshot.services;
-  app.time = snapshot.time;
-  // Unavailable weather keeps the last known values for display.
-  if (snapshot.weather.weatherAvailable) {
-    app.weather = snapshot.weather;
-    app.weather.observedMs = millis();
+  // The clock: the device's local time wins (LocalTime.h); the backend's
+  // strings are used only without it. World clocks still come from here.
+  if (clockSource() == ClockSource::Local) {
+    app.time.worldClocks = snapshot.time.worldClocks;
+  } else {
+    app.time = snapshot.time;
+    syncCalendarIfUnset(app.time.currentYear, app.time.currentMonth);
   }
-  else app.weather.weatherAvailable = false;
-  syncCalendarIfUnset(app.time.currentYear, app.time.currentMonth);
   app.serverOnline = true;
 }
 

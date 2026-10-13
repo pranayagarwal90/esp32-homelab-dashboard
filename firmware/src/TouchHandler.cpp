@@ -39,6 +39,8 @@
 static SPIClass touchSPI(HSPI);
 static XPT2046_Touchscreen touch(TOUCH_CS);
 static unsigned long lastTouchTime = 0;
+static bool pressHeld = false;    // A touch was handled; the finger has not lifted since.
+static bool repeatTouch = false;  // The touch being handled continues a held press.
 
 void setupTouch() {
   touchSPI.begin(TOUCH_CLK, TOUCH_MISO, TOUCH_MOSI, TOUCH_CS);
@@ -47,12 +49,17 @@ void setupTouch() {
 }
 
 void handleTouch() {
-  if (!touch.touched()) return;
+  if (!touch.touched()) {
+    pressHeld = false;
+    return;
+  }
   if (millis() - lastTouchTime < 250) return;
   lastTouchTime = millis();
 
   TS_Point p = touch.getPoint();
   if (p.z < 200) return;
+  repeatTouch = pressHeld;
+  pressHeld = true;
 
   int x = constrain(map(p.x, RAW_X_MIN, RAW_X_MAX, 0, 319), 0, 319);
   int y = constrain(map(p.y, RAW_Y_MIN, RAW_Y_MAX, 0, 239), 0, 239);
@@ -153,4 +160,8 @@ void handleTouch() {
 
 bool touchPressed() {
   return touch.touched();
+}
+
+bool touchIsRepeat() {
+  return repeatTouch;
 }

@@ -170,12 +170,14 @@ static void testHierarchy() {
   assert(tapRow(SettingsView::System, 3).confirm == ConfirmAction::Sleep);
 
   // CONNECTIVITY: Wi-Fi, Dashboard Server, Bluetooth.
-  assert(settingsMenuFor(SettingsView::Connectivity, menu) && menu.count == 3);
+  assert(settingsMenuFor(SettingsView::Connectivity, menu) && menu.count == 4);
   assert(tapRow(SettingsView::Connectivity, 0).target == SettingsView::Wifi);
   assert(tapRow(SettingsView::Connectivity, 1).target == SettingsView::Server);
   assert(strcmp(tapRow(SettingsView::Connectivity, 1).label, "HOMEDECK BACKEND") == 0);
   assert(tapRow(SettingsView::Connectivity, 1).confirm == ConfirmAction::None);
   assert(tapRow(SettingsView::Connectivity, 2).target == SettingsView::Bluetooth);
+  assert(tapRow(SettingsView::Connectivity, 3).target == SettingsView::Location);
+  assert(strcmp(tapRow(SettingsView::Connectivity, 3).label, "LOCATION") == 0);
 
   // DISPLAY: Brightness, Screensaver, Photos & Wallpaper.
   assert(settingsMenuFor(SettingsView::DisplayMenu, menu) && menu.count == 3);
@@ -196,6 +198,7 @@ static void testHierarchy() {
   assert(settingsParent(SettingsView::Wifi) == SettingsView::Connectivity);
   assert(settingsParent(SettingsView::WifiSetup) == SettingsView::Connectivity);
   assert(settingsParent(SettingsView::Server) == SettingsView::Connectivity);
+  assert(settingsParent(SettingsView::Location) == SettingsView::Connectivity);
   assert(settingsParent(SettingsView::Bluetooth) == SettingsView::Connectivity);
   assert(settingsParent(SettingsView::Brightness) == SettingsView::DisplayMenu);
   assert(settingsParent(SettingsView::Screensaver) == SettingsView::DisplayMenu);

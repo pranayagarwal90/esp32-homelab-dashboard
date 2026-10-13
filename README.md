@@ -326,11 +326,16 @@ g++ -std=c++11 -Wall -Wextra -Werror -Ifirmware/include firmware/test/test_backe
 g++ -std=c++11 -Wall -Wextra -Werror -Ifirmware/include firmware/test/test_provisioning.cpp -o /tmp/test-provisioning && /tmp/test-provisioning
 g++ -std=c++11 -Wall -Wextra -Werror -Ifirmware/include firmware/test/test_standalone.cpp -o /tmp/test-standalone && /tmp/test-standalone
 g++ -std=c++11 -Wall -Wextra -Werror -Ifirmware/include firmware/test/test_setup_page.cpp -o /tmp/test-setup-page && /tmp/test-setup-page
+g++ -std=c++11 -Wall -Wextra -Werror -Ifirmware/include firmware/test/test_portal.cpp -o /tmp/test-portal && /tmp/test-portal
+g++ -std=c++11 -Wall -Wextra -Werror -Ifirmware/include firmware/test/test_time.cpp -o /tmp/test-time && /tmp/test-time
+g++ -std=c++11 -Wall -Wextra -Werror -Ifirmware/include firmware/test/test_location.cpp -o /tmp/test-location && /tmp/test-location
+g++ -std=c++11 -Wall -Wextra -Werror -Ifirmware/include firmware/test/test_postal_code.cpp -o /tmp/test-postal-code && /tmp/test-postal-code
 # Needs ArduinoJson from a previous `pio run` (header-only):
 g++ -std=c++11 -Wall -Wextra -Werror -Ifirmware/include -Ifirmware/.pio/libdeps/esp32dev/ArduinoJson/src firmware/test/test_ai_logic.cpp -o /tmp/test-ai && /tmp/test-ai
 g++ -std=c++11 -Wall -Wextra -Werror -Ifirmware/include -Ifirmware/.pio/libdeps/esp32dev/ArduinoJson/src firmware/test/test_service_status.cpp -o /tmp/test-service-status && /tmp/test-service-status
 g++ -std=c++11 -Wall -Wextra -Werror -Ifirmware/include -Ifirmware/.pio/libdeps/esp32dev/ArduinoJson/src firmware/test/test_update.cpp -o /tmp/test-update && /tmp/test-update
 g++ -std=c++11 -Wall -Wextra -Werror -Ifirmware/include -Ifirmware/.pio/libdeps/esp32dev/ArduinoJson/src firmware/test/test_manifest_signature.cpp -o /tmp/test-manifest-signature && /tmp/test-manifest-signature
+g++ -std=c++11 -Wall -Wextra -Werror -Ifirmware/include -Ifirmware/.pio/libdeps/esp32dev/ArduinoJson/src firmware/test/test_open_meteo.cpp -o /tmp/test-open-meteo && /tmp/test-open-meteo
 # Release signing with real ECDSA (needs the openssl command):
 python3 -m unittest discover -s tools -p 'test_*.py'
 /tmp/test-settings

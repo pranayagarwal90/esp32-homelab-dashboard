@@ -16,6 +16,9 @@ enum class SettingsView : uint8_t {
   Wifi,
   WifiSetup,
   Server,     // HomeDeck Backend (optional backend URL).
+  Location,   // Location for local time and direct weather (optional).
+  PostalCode,    // Location > POSTAL CODE: the numeric keypad (no hotspot).
+  PostalResults, // Its search: searching, results, or why it failed.
   Brightness,
   Screensaver,
   Bluetooth,
@@ -41,7 +44,7 @@ constexpr int SETTINGS_LIST_PITCH = 41;
 constexpr int SETTINGS_LIST_MAX_ROWS = 4;
 
 enum class ConfirmAction : uint8_t { None, Restart, Sleep, StartWifiSetup, ForgetWifi, ApplyBluetooth,
-                                     RemoveBackend };
+                                     RemoveBackend, StartLocationSetup, RemoveLocation };
 
 struct SettingsMenuEntry {
   const char* label;
@@ -76,6 +79,7 @@ inline bool settingsMenuFor(SettingsView view, SettingsMenu& out) {
     {"WI-FI", SettingsView::Wifi, A::None, UiIcon::Wifi, UiColor::Blue},
     {"HOMEDECK BACKEND", SettingsView::Server, A::None, UiIcon::HomeServer, UiColor::Green},
     {"BLUETOOTH", SettingsView::Bluetooth, A::None, UiIcon::Bluetooth, UiColor::Blue},
+    {"LOCATION", SettingsView::Location, A::None, UiIcon::Weather, UiColor::Teal},
   };
   static const SettingsMenuEntry display[] = {
     {"BRIGHTNESS", SettingsView::Brightness, A::None, UiIcon::Brightness, UiColor::Yellow},
@@ -88,7 +92,7 @@ inline bool settingsMenuFor(SettingsView view, SettingsMenu& out) {
   switch (view) {
     case SettingsView::Root: out = {"SETTINGS", root, 4}; return true;
     case SettingsView::System: out = {"SYSTEM", system, 4}; return true;
-    case SettingsView::Connectivity: out = {"CONNECTIVITY", connectivity, 3}; return true;
+    case SettingsView::Connectivity: out = {"CONNECTIVITY", connectivity, 4}; return true;
     case SettingsView::DisplayMenu: out = {"DISPLAY", display, 3}; return true;
     case SettingsView::Utilities: out = {"UTILITIES", utilities, 1}; return true;
     default: return false;
@@ -114,6 +118,7 @@ inline SettingsView settingsParent(SettingsView view) {
     case SettingsView::Wifi:
     case SettingsView::WifiSetup:
     case SettingsView::Server:
+    case SettingsView::Location:
     case SettingsView::Bluetooth:
       return SettingsView::Connectivity;
     case SettingsView::Brightness:
@@ -122,6 +127,10 @@ inline SettingsView settingsParent(SettingsView view) {
       return SettingsView::DisplayMenu;
     case SettingsView::Stopwatch:
       return SettingsView::Utilities;
+    case SettingsView::PostalCode:      // CANCEL
+      return SettingsView::Location;
+    case SettingsView::PostalResults:   // BACK: edit the code
+      return SettingsView::PostalCode;
     default:
       return SettingsView::Root;
   }
@@ -178,6 +187,10 @@ inline ConfirmText confirmText(ConfirmAction action) {
       return {"RESTART TO APPLY?", "Bluetooth changes apply", "after a restart.", "RESTART"};
     case ConfirmAction::RemoveBackend:
       return {"REMOVE BACKEND?", "HomeDeck keeps working on its own.", "Wi-Fi stays saved. Restarts.", "REMOVE"};
+    case ConfirmAction::StartLocationSetup:
+      return {"SEARCH ON PHONE?", "Opens a setup hotspot so you can", "search for your town on your phone.", "START"};
+    case ConfirmAction::RemoveLocation:
+      return {"REMOVE LOCATION?", "Clock and weather stop using it.", "Wi-Fi and backend stay.", "REMOVE"};
     case ConfirmAction::None:
       break;
   }

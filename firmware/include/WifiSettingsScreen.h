@@ -9,6 +9,10 @@ void updateWifiSettings();
 void drawServerSettings();
 void handleServerSettingsTouch(int x, int y);
 void updateServerSettings();
+// Settings > Location: the saved place, local time, weather freshness.
+void drawLocationSettings();
+void handleLocationSettingsTouch(int x, int y);
+void updateLocationSettings();
 void drawWifiSetup();
 void handleWifiSetupTouch(int x, int y);
 void updateWifiSetupView();

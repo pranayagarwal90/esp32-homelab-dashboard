@@ -4,6 +4,7 @@
 #include "AlertsScreen.h"
 #include "AppState.h"
 #include "DeviceConfig.h"
+#include "DirectWeather.h"
 #include "Display.h"
 #include "HomeLogic.h"
 #include "PageRouter.h"
@@ -83,11 +84,13 @@ static void drawWeatherSummary() {
   tft.fillRect(0, HOME_WEATHER_TOP, 320, HOME_WEATHER_BOTTOM - HOME_WEATHER_TOP + 1, TFT_BLACK);
   drawUiIcon(UiIcon::Weather, 12, HOME_WEATHER_TOP + 6, 34, TFT_WHITE, UiColor::Yellow, TFT_BLACK);
   int x = 58;
-  if (!backendConfigured() || (!w.weatherAvailable && w.weatherCode < 0)) {
+  WeatherView view = weatherView();
+  if (view != WeatherView::Data) {
     tft.setTextSize(2);
     tft.setTextColor(TFT_DARKGREY, TFT_BLACK);
     tft.setCursor(x, HOME_WEATHER_TOP + 14);
-    tft.print(backendConfigured() ? "Weather unavailable" : backendNotice(BackendFeature::Weather).title);
+    tft.print(view == WeatherView::SetLocation ? backendNotice(BackendFeature::Weather).title
+              : view == WeatherView::Loading ? "Loading weather..." : "Weather unavailable");
     return;
   }
   char text[24];
@@ -122,7 +125,7 @@ static void drawWeatherSummary() {
 
 static uint32_t weatherHash() {
   const WeatherData& w = app.weather;
-  uint32_t h = fnv(w.weatherCondition.c_str());
+  uint32_t h = fnvInt(int(weatherView()), fnv(w.weatherCondition.c_str()));
   h = fnvInt(toTenths(w.temperatureC), h);
   h = fnvInt(w.weatherAvailable, h);
   h = fnvInt(w.weatherCode, h);

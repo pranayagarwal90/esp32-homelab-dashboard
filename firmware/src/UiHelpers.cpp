@@ -38,8 +38,8 @@ void drawBackendNotice(BackendFeature feature, int y) {
   tft.setCursor((320 - tft.textWidth(notice.hint)) / 2, y + 30);
   tft.print(notice.hint);
   tft.setTextColor(TFT_DARKGREY, TFT_BLACK);
-  tft.setCursor((320 - tft.textWidth(BACKEND_SETUP_HINT)) / 2, y + 46);
-  tft.print(BACKEND_SETUP_HINT);
+  tft.setCursor((320 - tft.textWidth(notice.setup)) / 2, y + 46);
+  tft.print(notice.setup);
 }
 
 void drawTitleBar(const char* title, const char* right) {

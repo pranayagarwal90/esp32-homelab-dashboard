@@ -3,9 +3,11 @@
 #include "AppState.h"
 #include "Display.h"
 #include "PageRouter.h"
+#include "TimeLogic.h"
 
-static int calendarYear = 2026;
-static int calendarMonth = 1;
+// The shown month (TimeLogic.h): today's month once a real date is known
+// (the device clock, or the backend's), unless the user already moved it.
+static CalendarCursor cursor;
 
 static const char* MONTH_NAMES[] = {
   "JANUARY", "FEBRUARY", "MARCH", "APRIL", "MAY", "JUNE",
@@ -29,27 +31,14 @@ static int dayOfWeek(int year, int month, int day) {
   return (year + year/4 - year/100 + year/400 + t[month-1] + day) % 7;
 }
 
-static void changeCalendarMonth(int delta) {
-  calendarMonth += delta;
-  if (calendarMonth < 1) {
-    calendarMonth = 12;
-    calendarYear--;
-  } else if (calendarMonth > 12) {
-    calendarMonth = 1;
-    calendarYear++;
-  }
-}
-
 void setCalendarMonth(int year, int month) {
-  calendarYear = year;
-  calendarMonth = month;
+  if (month < 1 || month > 12) return;
+  cursor.year = year;
+  cursor.month = month;
 }
 
 void syncCalendarIfUnset(int year, int month) {
-  if (calendarYear == 2026 && calendarMonth == 1 && month != 1) {
-    calendarYear = year;
-    calendarMonth = month;
-  }
+  calendarSyncToday(cursor, year, month);
 }
 
 void drawCalendarPage() {
@@ -58,7 +47,7 @@ void drawCalendarPage() {
 
   tft.setTextSize(2);
   tft.setTextColor(TFT_WHITE, TFT_BLACK);
-  String title = String(MONTH_NAMES[calendarMonth - 1]) + " " + String(calendarYear);
+  String title = String(MONTH_NAMES[cursor.month - 1]) + " " + String(cursor.year);
   int titleWidth = tft.textWidth(title);
   tft.setCursor((320 - titleWidth) / 2, 8);
   tft.print(title);
@@ -71,8 +60,8 @@ void drawCalendarPage() {
     tft.print(weekdays[i]);
   }
 
-  int first = dayOfWeek(calendarYear, calendarMonth, 1);
-  int totalDays = daysInMonth(calendarYear, calendarMonth);
+  int first = dayOfWeek(cursor.year, cursor.month, 1);
+  int totalDays = daysInMonth(cursor.year, cursor.month);
   int cellW = 43;
   int cellH = 23;
   int startX = 10;
@@ -85,7 +74,7 @@ void drawCalendarPage() {
     int x = startX + col * cellW;
     int y = startY + row * cellH;
 
-    bool today = calendarYear == app.time.currentYear && calendarMonth == app.time.currentMonth && day == app.time.currentDay;
+    bool today = cursor.year == app.time.currentYear && cursor.month == app.time.currentMonth && day == app.time.currentDay;
     if (today) {
       tft.fillCircle(x + 10, y + 5, 10, TFT_BLUE);
       tft.setTextColor(TFT_WHITE, TFT_BLUE);
@@ -110,12 +99,12 @@ void drawCalendarPage() {
 void handleCalendarTouch(int x, int y) {
   if (y >= 205) {
     if (x < 106) {
-      changeCalendarMonth(-1);
+      calendarStep(cursor, -1);
       drawCalendarPage();
     } else if (x < 214) {
       showPage(PAGE_MORE);
     } else {
-      changeCalendarMonth(1);
+      calendarStep(cursor, 1);
       drawCalendarPage();
     }
   }

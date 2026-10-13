@@ -8,9 +8,11 @@
 #include "DisplaySettingsScreen.h"
 #include "DeviceConfig.h"
 #include "DeviceIdentity.h"
+#include "LocationStore.h"
 #include "FirmwareUpdate.h"
 #include "UpdateScreen.h"
 #include "PageRouter.h"
+#include "PostalCodeScreen.h"
 #include "PowerManager.h"
 #include "SettingsStore.h"
 #include "SettingsUi.h"
@@ -360,6 +362,16 @@ static void runConfirmed(ConfirmAction action) {
         showSettingsView(SettingsView::Server);
       }
       break;
+    case ConfirmAction::StartLocationSetup:
+      startLocationSetup();
+      showSettingsView(SettingsView::WifiSetup); // Shows a failure message if it did not start.
+      break;
+    case ConfirmAction::RemoveLocation:
+      // Only the location namespace: Wi-Fi and backend stay. No restart:
+      // the clock and weather follow at once (LocalTime, DirectWeather).
+      if (!clearLocation()) Serial.println("[LOCATION] Could not remove (NVS write failed)");
+      showSettingsView(SettingsView::Location);
+      break;
     case ConfirmAction::ForgetWifi: {
       WifiCredentials builtIn;
       if (builtInWifiCredentials(builtIn)) requestWifiSwitch(builtIn, WifiSource::BuiltIn);
@@ -414,6 +426,9 @@ void drawSettingsPage() {
     case SettingsView::Info: drawDeviceInfo(); break;
     case SettingsView::Wifi: drawWifiSettings(); break;
     case SettingsView::Server: drawServerSettings(); break;
+    case SettingsView::Location: drawLocationSettings(); break;
+    case SettingsView::PostalCode: drawPostalCode(); break;
+    case SettingsView::PostalResults: drawPostalResults(); break;
     case SettingsView::Bluetooth: drawBluetoothSettings(); break;
     case SettingsView::Sleeping: drawSleeping(); break;
     case SettingsView::Wallpaper: drawWallpaperSettings(); break;
@@ -432,6 +447,7 @@ void drawSettingsPage() {
 
 static void goBack() {
   flushSettings();
+  if (view == SettingsView::PostalResults) cancelPostalSearch(); // Nothing saved; late results ignored.
   showSettingsView(settingsParent(view));
 }
 
@@ -460,6 +476,9 @@ void handleSettingsTouch(int x, int y) {
     case SettingsView::Screensaver: handleScreensaverSettingsTouch(x, y); break;
     case SettingsView::Wifi: handleWifiSettingsTouch(x, y); break;
     case SettingsView::Server: handleServerSettingsTouch(x, y); break;
+    case SettingsView::Location: handleLocationSettingsTouch(x, y); break;
+    case SettingsView::PostalCode: handlePostalCodeTouch(x, y); break;
+    case SettingsView::PostalResults: handlePostalResultsTouch(x, y); break;
     case SettingsView::Bluetooth: handleBluetoothTouch(x, y); break;
     case SettingsView::Build: handleBuildTouch(x, y); break;
     default: {
@@ -479,6 +498,8 @@ void updateSettings() {
   if (view == SettingsView::Build) updateBuildInfo();
   if (view == SettingsView::Wifi) updateWifiSettings();
   if (view == SettingsView::Server) updateServerSettings();
+  if (view == SettingsView::Location) updateLocationSettings();
+  if (view == SettingsView::PostalResults) updatePostalResults();
   if (view == SettingsView::WifiSetup) updateWifiSetupView();
   if (view == SettingsView::Wallpaper) updateWallpaperSettings();
 }

@@ -2,6 +2,7 @@
 #include "WeatherScreen.h"
 #include "AppState.h"
 #include "DeviceConfig.h"
+#include "DirectWeather.h"
 #include "Display.h"
 #include "PageRouter.h"
 #include "UiHelpers.h"
@@ -40,16 +41,17 @@ static void drawCurrent() {
   const WeatherData& w = app.weather;
   tft.fillRect(CURRENT_X, 40, 320 - CURRENT_X, 86, TFT_BLACK);
   char text[24];
-  if (!backendConfigured()) {
+  WeatherView view = weatherView();
+  if (view == WeatherView::SetLocation || view == WeatherView::Loading) {
     tft.setTextSize(2);
     tft.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
     tft.setCursor(CURRENT_X, 60);
     tft.print("Weather");
     tft.setCursor(CURRENT_X, 80);
-    tft.print("not set up");
+    tft.print(view == WeatherView::Loading ? "Loading..." : "Set location");
     return;
   }
-  if (!w.weatherAvailable && w.weatherCode < 0) {
+  if (view == WeatherView::Unavailable) {
     tft.setTextSize(2);
     tft.setTextColor(TFT_RED, TFT_BLACK);
     tft.setCursor(CURRENT_X, 60);
@@ -174,28 +176,38 @@ static uint32_t textHash() {
   mix(&w.sunset, sizeof(w.sunset));
   bool sunriseNext = weatherShowSunrise(nowEpoch(), w.sunrise);
   mix(&sunriseNext, 1);
+  uint8_t view = uint8_t(weatherView());
+  mix(&view, 1);
   return h;
 }
 
-// Standalone: where weather comes from, in place of details and forecast.
-static void drawWeatherNotice() {
-  tft.fillRect(0, DETAIL_Y, 320, 240 - DETAIL_Y - 35, TFT_BLACK);
+// No weather data: what to do, in place of details and forecast.
+static void drawWeatherNotice(WeatherView view) {
+  tft.fillRect(0, DETAIL_Y - 4, 320, 240 - DETAIL_Y - 31, TFT_BLACK);
   tft.setTextSize(1);
   tft.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
   tft.setCursor(12, DETAIL_Y);
-  tft.print(backendNotice(BackendFeature::Weather).hint);
-  tft.setTextColor(TFT_DARKGREY, TFT_BLACK);
-  tft.setCursor(12, DETAIL_Y + 14);
-  tft.print(BACKEND_SETUP_HINT);
+  if (view == WeatherView::SetLocation) {
+    tft.print(backendNotice(BackendFeature::Weather).hint);
+    tft.setTextColor(TFT_DARKGREY, TFT_BLACK);
+    tft.setCursor(12, DETAIL_Y + 14);
+    tft.print(backendNotice(BackendFeature::Weather).setup);
+  } else if (view == WeatherView::Loading) {
+    tft.print("Getting the forecast for your location.");
+  } else {
+    tft.print(weatherSource() == WeatherSource::Direct ? "Retry later. HomeDeck tries again by itself."
+                                                       : "The HomeDeck Backend sent no weather.");
+  }
 }
 
 static void drawText() {
   drawCurrent();
-  if (backendConfigured()) {
+  WeatherView view = weatherView();
+  if (view == WeatherView::Data) {
     drawDetails();
     drawHourly();
   } else {
-    drawWeatherNotice();
+    drawWeatherNotice(view);
   }
   drawnTextHash = textHash();
 }

@@ -160,7 +160,8 @@ static std::string readSource(const char* name) {
 
 static void testDeviceUsesTheRenderer() {
   std::string portal = readSource("src/WifiProvisioning.cpp");
-  assert(has(portal, "view.firstRun = firstRunMode;") && has(portal, "renderSetupForm(page, view);"));
+  // The Wi-Fi page is drawn for the portal mode (test_portal covers the routing).
+  assert(has(portal, "renderPortalRoot(page, portalMode, view, LocationPageView());"));
   assert(has(portal, "setupBackendArg(firstRunMode, server.hasArg(\"server\"), backend.c_str())"));
   // No second copy of the form, and no old required server field anywhere.
   for (const char* text : {"<form", "name=server", "name=pass", "Dashboard Server", "required"}) {

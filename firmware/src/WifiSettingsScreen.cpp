@@ -3,6 +3,11 @@
 #include "WifiSettingsScreen.h"
 #include "AppState.h"
 #include "DeviceConfig.h"
+#include "DirectWeather.h"
+#include "LocalTime.h"
+#include "LocationStore.h"
+#include "LocationUiLogic.h"
+#include "PostalCodeScreen.h"
 #include "Display.h"
 #include "NetworkManager.h"
 #include "SettingsScreen.h"
@@ -112,6 +117,100 @@ void updateServerSettings() {
   if (changed || millis() - lastRefresh >= REFRESH_MS) drawServerValues();
 }
 
+// --- Location (optional) ------------------------------------------------------------------
+
+enum LocationLine { LOC_PLACE, LOC_REGION, LOC_TIME, LOC_WEATHER, LOC_LINES };
+static uint32_t drawnLocationRevision = 0;
+static constexpr size_t VALUE_CHARS = 35; // x 110..320 at size 1.
+
+// Values on one line: cut (at a UTF-8 boundary) to the value column.
+static void drawLocationValue(int line, const char* value) {
+  char text[VALUE_CHARS + 1];
+  size_t length = strlen(value);
+  if (length > VALUE_CHARS) {
+    length = VALUE_CHARS;
+    while (length > 0 && (((unsigned char)value[length]) & 0xC0) == 0x80) length--;
+  }
+  memcpy(text, value, length);
+  text[length] = '\0';
+  drawInfoValue(lineY(line), text);
+}
+
+static void drawLocationValues() {
+  Location l;
+  bool configured = currentLocation(l);
+  char text[48];
+  if (!configured) {
+    drawLocationValue(LOC_TIME, hasUtcTime() ? "Needs a location" : "Waiting for network time");
+    drawLocationValue(LOC_WEATHER, weatherSource() == WeatherSource::Backend ? "From the HomeDeck Backend"
+                                                                              : "Needs a location");
+  } else {
+    if (l.offsetKnown) {
+      formatUtcOffset(l.utcOffset, text, sizeof(text));
+      if (l.timezone[0]) snprintf(text + strlen(text), sizeof(text) - strlen(text), " %s", l.timezone);
+    } else {
+      snprintf(text, sizeof(text), "Getting local time...");
+    }
+    drawLocationValue(LOC_TIME, text);
+    DirectWeatherInfo info;
+    directWeatherInfo(info);
+    if (info.haveData) snprintf(text, sizeof(text), "Updated %u min ago%s", unsigned(info.ageMs / 60000),
+                                info.failed ? " (retrying)" : "");
+    else snprintf(text, sizeof(text), "%s", info.failed ? "Unavailable, retrying" : "Loading...");
+    drawLocationValue(LOC_WEATHER, text);
+  }
+  lastRefresh = millis();
+}
+
+void drawLocationSettings() {
+  static const char* labels[LOC_LINES] = {"Location", "Region", "Time", "Weather"};
+  drawSettingsFrame("LOCATION");
+  for (int i = 0; i < LOC_LINES; i++) drawInfoLine(lineY(i), labels[i], "");
+  Location l;
+  bool configured = currentLocation(l);
+  drawnLocationRevision = locationRevision();
+  char region[2 * LOCATION_REGION_MAX + 4] = "--";
+  if (configured && (l.admin1[0] || l.country[0])) {
+    snprintf(region, sizeof(region), "%s%s%s", l.admin1, l.admin1[0] && l.country[0] ? ", " : "", l.country);
+  }
+  drawLocationValue(LOC_PLACE, configured ? l.name : "Not configured");
+  drawLocationValue(LOC_REGION, region);
+  drawLocationValues();
+  // POSTAL CODE: the keypad on the device. SEARCH ON PHONE: the setup
+  // hotspot's location page (towns, letters in postal codes).
+  drawMenuButton(LOCATION_LEFT_X, LOCATION_BUTTON_Y, LOCATION_BUTTON_W, LOCATION_BUTTON_H, "POSTAL CODE");
+  drawMenuButton(LOCATION_RIGHT_X, LOCATION_BUTTON_Y, LOCATION_BUTTON_W, LOCATION_BUTTON_H, "SEARCH ON PHONE");
+  if (configured) {
+    drawMenuButton(LOCATION_RIGHT_X, LOCATION_REMOVE_Y, LOCATION_BUTTON_W, LOCATION_REMOVE_H, "REMOVE");
+  } else {
+    tft.setTextSize(1);
+    tft.setTextColor(TFT_DARKGREY, TFT_BLACK);
+    tft.setCursor(14, 178);
+    tft.print("Set your location for local time and weather.");
+  }
+}
+
+void handleLocationSettingsTouch(int x, int y) {
+  switch (locationButtonAt(x, y, locationConfigured())) {
+    case LocationButton::PostalCode:
+      openPostalCode(); // On the device: no hotspot.
+      break;
+    case LocationButton::SearchOnPhone:
+      askConfirm(ConfirmAction::StartLocationSetup, SettingsView::Location);
+      break;
+    case LocationButton::Remove:
+      askConfirm(ConfirmAction::RemoveLocation, SettingsView::Location);
+      break;
+    case LocationButton::None:
+      break;
+  }
+}
+
+void updateLocationSettings() {
+  if (locationRevision() != drawnLocationRevision) drawLocationSettings();
+  else if (millis() - lastRefresh >= REFRESH_MS) drawLocationValues();
+}
+
 // --- Setup hotspot view ----------------------------------------------------------------
 
 static uint32_t drawnRevision = 0;
@@ -165,6 +264,11 @@ void drawSetupStatus(int statusY) {
       snprintf(line, sizeof(line), "Could not save the settings.");
       color = TFT_RED;
       break;
+    case WifiSetupPhase::LocationSaved:
+      snprintf(line, sizeof(line), "Location saved.");
+      second = "Hotspot closes automatically.";
+      color = TFT_GREEN;
+      break;
   }
   tft.fillRect(0, statusY, 320, 36, TFT_BLACK);
   tft.setTextSize(1);
@@ -207,17 +311,22 @@ void drawWifiSetup() {
   drawSetupStatus(STATUS_Y);
 }
 
+// Where the hotspot view returns: the page that opened it.
+static SettingsView setupReturnView() {
+  return wifiSetupForLocation() ? SettingsView::Location : SettingsView::Wifi;
+}
+
 void handleWifiSetupTouch(int, int y) {
   if (y < BACK_BAR_Y) return;
-  // STOP SETUP closes the hotspot; the view returns to Wi-Fi status once it
-  // has closed (updateWifiSetupView).
+  // STOP SETUP closes the hotspot; the view returns to the page that opened
+  // it once it has closed (updateWifiSetupView).
   if (wifiSetupRunning()) stopWifiSetup();
-  else showSettingsView(SettingsView::Wifi);
+  else showSettingsView(setupReturnView());
 }
 
 void updateWifiSetupView() {
   if (wifiSetupPhase() == WifiSetupPhase::Off) {
-    showSettingsView(SettingsView::Wifi);
+    showSettingsView(setupReturnView());
     return;
   }
   if (wifiSetupRevision() != drawnRevision) drawSetupStatus(STATUS_Y);

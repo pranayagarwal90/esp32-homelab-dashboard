@@ -73,27 +73,33 @@ inline const char* backendStatusText(BackendConfig backend, bool online, bool wi
 }
 
 // --- Friendly "not configured" copy ------------------------------------------------------
-// title: size-2 text (at most 22 characters); hint: size-1 text (at most 48).
+// title: size-2 text (at most 22 characters); hint and setup: size-1 text (at
+// most 48). Weather needs a location, not a backend (Phase 8.6).
 
 enum class BackendFeature : uint8_t { Services, ServerStats, Photos, Ai, Weather, Clocks, Updates, Alerts };
 
 struct BackendNotice {
   const char* title;
   const char* hint;
+  const char* setup;  // Where to set it up.
 };
 
 constexpr const char* BACKEND_SETUP_HINT = "Optional: Settings > Connectivity > Backend";
+constexpr const char* LOCATION_SETUP_HINT = "Settings > Connectivity > Location";
 
 inline BackendNotice backendNotice(BackendFeature feature) {
   switch (feature) {
-    case BackendFeature::Services: return {"Not configured", "Services come from a HomeDeck Backend."};
-    case BackendFeature::ServerStats: return {"Not configured", "Server stats come from a HomeDeck Backend."};
-    case BackendFeature::Photos: return {"No photo source", "Photos come from a HomeDeck Backend."};
-    case BackendFeature::Ai: return {"AI not configured", "AI answers come from a HomeDeck Backend."};
-    case BackendFeature::Weather: return {"Weather not set up", "Weather comes from a HomeDeck Backend."};
-    case BackendFeature::Clocks: return {"Not configured", "World clocks come from a HomeDeck Backend."};
-    case BackendFeature::Updates: return {"Not configured", "Update service not configured"};
-    case BackendFeature::Alerts: return {"No alerts", "Alerts come from a HomeDeck Backend."};
+    case BackendFeature::Services:
+      return {"Not configured", "Services come from a HomeDeck Backend.", BACKEND_SETUP_HINT};
+    case BackendFeature::ServerStats:
+      return {"Not configured", "Server stats come from a HomeDeck Backend.", BACKEND_SETUP_HINT};
+    case BackendFeature::Photos: return {"No photo source", "Photos come from a HomeDeck Backend.", BACKEND_SETUP_HINT};
+    case BackendFeature::Ai: return {"AI not configured", "AI answers come from a HomeDeck Backend.", BACKEND_SETUP_HINT};
+    case BackendFeature::Weather: return {"Set location", "Weather and local time use your location.", LOCATION_SETUP_HINT};
+    case BackendFeature::Clocks:
+      return {"Not configured", "World clocks come from a HomeDeck Backend.", BACKEND_SETUP_HINT};
+    case BackendFeature::Updates: return {"Not configured", "Update service not configured", BACKEND_SETUP_HINT};
+    case BackendFeature::Alerts: return {"No alerts", "Alerts come from a HomeDeck Backend.", BACKEND_SETUP_HINT};
   }
-  return {"", ""};
+  return {"", "", ""};
 }

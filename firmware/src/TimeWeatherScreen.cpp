@@ -2,6 +2,7 @@
 #include "TimeWeatherScreen.h"
 #include "AppState.h"
 #include "DeviceConfig.h"
+#include "DirectWeather.h"
 #include "Display.h"
 #include "PageRouter.h"
 #include "UiHelpers.h"
@@ -91,9 +92,12 @@ void drawTimePage() {
     tft.printf("High %.1fC   Low %.1fC", weather.highC, weather.lowC);
   } else {
     tft.setTextSize(1);
-    tft.setTextColor(backendConfigured() ? TFT_RED : TFT_LIGHTGREY, TFT_BLACK);
+    WeatherView view = weatherView();
+    bool calm = view == WeatherView::SetLocation || view == WeatherView::Loading;
+    tft.setTextColor(calm ? TFT_LIGHTGREY : TFT_RED, TFT_BLACK);
     tft.setCursor(15, 95);
-    tft.print(backendConfigured() ? "Weather unavailable" : backendNotice(BackendFeature::Weather).title);
+    tft.print(view == WeatherView::SetLocation ? backendNotice(BackendFeature::Weather).title
+              : view == WeatherView::Loading ? "Loading weather..." : "Weather unavailable");
   }
   // The weather block opens the WEATHER page.
   tft.setTextSize(1);
